@@ -1,3 +1,4 @@
 /target
 config.toml
 .fastembed_cache/
+*.embedcache

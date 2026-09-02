@@ -22,7 +22,7 @@ Use `--no-default-features` for routine test runs. Tests use `DeterministicEmbed
 
 ## Features
 
-`default = ["local-embed"]` pulls in `fastembed` (ONNX BGE-small-zh-v1.5). `FastEmbedder::try_new()` **downloads the model on first use** (network required). Embedder fallback chain: `--offline` → Deterministic; CLI/env/`config.toml` Cohere key → `embed-v4.0` at `https://api.cohere.ai/compatibility/v1` (1536-dim); else FastEmbed; FastEmbed init failure → warn + Deterministic. Never assume a test needs the ONNX model or a Cohere key.
+`default = ["local-embed"]` pulls in `fastembed` (ONNX BGE-small-zh-v1.5). `FastEmbedder::try_new()` **downloads the model on first use** (network required). Embedder chain: `--offline` → Deterministic (no `.embedcache`); CLI/env/`config.toml` Cohere key → `embed-v4.0` at `https://api.cohere.ai/compatibility/v1` (1536-dim) wrapped with `{index_file}.embedcache`; else FastEmbed; **FastEmbed init failure is a hard error** (no silent hash fallback). Without `local-embed` and without a key, the CLI errors and asks for `--offline` or a Cohere key. Never assume a test needs the ONNX model or a Cohere key.
 
 ## CLI binary flow
 

@@ -2,9 +2,12 @@ use crate::error::{Result, VectorError};
 use crate::vector::math::normalize_in_place;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 use std::sync::Arc;
-#[cfg(feature = "local-embed")]
 use tracing::info;
+
+mod cache;
+pub use cache::{CachedEmbedder, embed_cache_path};
 
 /// Default dimension for the local Chinese BGE-small-zh-v1.5 embedder (CLI path).
 pub const LOCAL_EMBEDDING_DIM: usize = 512;
@@ -316,6 +319,87 @@ pub fn create_embedder_arc(embedder: impl Embedder + 'static) -> Arc<dyn Embedde
     Arc::new(embedder)
 }
 
+/// CLI/lib selection for [`resolve_embedder`]. Empty `api_key` is treated as unset.
+#[derive(Debug, Clone)]
+pub struct EmbedderSelection {
+    pub offline: bool,
+    pub api_key: Option<String>,
+    pub base_url: Option<String>,
+    pub model: String,
+    pub dimension: usize,
+}
+
+/// Fail-closed embedder construction. Only the remote OpenAI path is cache-wrapped.
+///
+/// `cache_path` is the vector index file; the cache is `{index_file}.embedcache`.
+pub fn resolve_embedder(
+    selection: &EmbedderSelection,
+    cache_path: Option<&Path>,
+) -> Result<Arc<dyn Embedder>> {
+    if selection.offline {
+        info!(
+            "Using offline Deterministic Embedder ({}-dim)",
+            selection.dimension
+        );
+        return Ok(create_embedder_arc(DeterministicEmbedder::new(
+            selection.dimension,
+        )));
+    }
+
+    let api_key = selection
+        .api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let base_url = selection
+        .base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| api_key.as_ref().map(|_| COHERE_COMPAT_BASE_URL.to_string()));
+
+    if let Some(base_url) = base_url {
+        info!(
+            "Using remote OpenAI-compatible embedder {} at {} ({}-dim)",
+            selection.model, base_url, selection.dimension
+        );
+        let inner: Arc<dyn Embedder> = create_embedder_arc(OpenAIEmbedder::new(
+            base_url,
+            api_key,
+            selection.model.clone(),
+            selection.dimension,
+        ));
+        if let Some(index_file) = cache_path {
+            let cache_file = embed_cache_path(index_file);
+            return Ok(create_embedder_arc(CachedEmbedder::new(inner, cache_file)?));
+        }
+        return Ok(inner);
+    }
+
+    #[cfg(feature = "local-embed")]
+    {
+        let fe = FastEmbedder::try_new().map_err(|e| {
+            VectorError::EmbeddingError(format!(
+                "FastEmbed init failed: {e}. Pass --offline or provide a Cohere API key (no silent hash fallback)."
+            ))
+        })?;
+        info!(
+            "Using local FastEmbed ONNX BGE-small-zh-v1.5 ({}-dim)",
+            fe.dimension()
+        );
+        return Ok(create_embedder_arc(fe));
+    }
+
+    #[cfg(not(feature = "local-embed"))]
+    {
+        Err(VectorError::EmbeddingError(
+            "No embedding backend: pass --offline for the deterministic hash embedder, or provide a Cohere API key (--embed-api-key / COHERE_API_KEY / config.toml)".into(),
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -378,5 +462,67 @@ mod tests {
         assert_eq!(json["model"], "embed-v4.0");
         assert_eq!(json["input"][0], "捉住主要矛盾");
         assert!(json.get("dimensions").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_resolve_offline_uses_deterministic_and_skips_cache_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let index_file = tmp.path().join("vector_store.bin");
+        let selection = EmbedderSelection {
+            offline: true,
+            api_key: None,
+            base_url: None,
+            model: "embed-v4.0".into(),
+            dimension: 64,
+        };
+        let embedder = resolve_embedder(&selection, Some(&index_file)).unwrap();
+        assert_eq!(embedder.model_name(), "deterministic-hash-64");
+        assert_eq!(embedder.dimension(), 64);
+        let _ = embedder.embed("捉住主要矛盾").await.unwrap();
+        assert!(
+            !embed_cache_path(&index_file).exists(),
+            "offline deterministic path must not create .embedcache"
+        );
+    }
+
+    #[cfg(not(feature = "local-embed"))]
+    #[test]
+    fn test_resolve_no_key_no_offline_is_error_without_local_embed() {
+        let selection = EmbedderSelection {
+            offline: false,
+            api_key: None,
+            base_url: None,
+            model: "embed-v4.0".into(),
+            dimension: 1536,
+        };
+        let err = match resolve_embedder(&selection, None) {
+            Err(e) => e,
+            Ok(_) => panic!("expected resolve_embedder to fail without local-embed or key"),
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains("--offline") && msg.contains("Cohere"),
+            "error should ask for --offline or a Cohere key, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_resolve_remote_delegates_model_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let index_file = tmp.path().join("vector_store.bin");
+        let selection = EmbedderSelection {
+            offline: false,
+            api_key: Some("test-key".into()),
+            base_url: None,
+            model: "embed-v4.0".into(),
+            dimension: 1536,
+        };
+        let embedder = resolve_embedder(&selection, Some(&index_file)).unwrap();
+        assert_eq!(embedder.model_name(), "embed-v4.0");
+        assert_eq!(embedder.dimension(), 1536);
+        assert!(
+            !embed_cache_path(&index_file).exists(),
+            "cache file is created on miss, not at construction"
+        );
     }
 }

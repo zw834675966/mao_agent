@@ -21,7 +21,9 @@ pub enum VectorError {
     #[error("Vector dimension mismatch: expected {expected}, got {actual}")]
     DimensionMismatch { expected: usize, actual: usize },
 
-    #[error("vector snapshot identity mismatch: snapshot model `{snapshot_model}` dim {snapshot_dimension} vs embedder `{source_model}` dim {source_dimension}; re-run ingest to rebuild the index")]
+    #[error(
+        "vector snapshot identity mismatch: snapshot model `{snapshot_model}` dim {snapshot_dimension} vs embedder `{source_model}` dim {source_dimension}; re-run ingest to rebuild the index"
+    )]
     IdentityMismatch {
         snapshot_model: String,
         snapshot_dimension: usize,

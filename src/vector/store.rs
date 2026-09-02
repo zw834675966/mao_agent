@@ -6,6 +6,7 @@ use crate::model::{
 };
 use crate::vector::embedder::{DeterministicEmbedder, Embedder, create_embedder_arc};
 use crate::vector::index::VectorIndex;
+use crate::vector::persist::{self, SnapshotIdentity};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -174,17 +175,12 @@ impl VectorStore {
         }
 
         let index_guard = self.index.read().await;
-        let encoded: Vec<u8> = bincode::serialize(&*index_guard)
-            .map_err(|e| VectorError::Serialization(e.to_string()))?;
-
-        // Write to a sibling tmp file, then replace. Windows `rename` cannot
-        // overwrite an existing destination (WinError 183).
-        let temp_path = target_path.with_extension("tmp");
-        std::fs::write(&temp_path, encoded)?;
-        if target_path.exists() {
-            std::fs::remove_file(target_path)?;
-        }
-        std::fs::rename(&temp_path, target_path)?;
+        let identity = SnapshotIdentity {
+            model: self.embedder.model_name().to_string(),
+            dimension: index_guard.dimension(),
+        };
+        let encoded = persist::encode_snapshot(&identity, &index_guard)?;
+        persist::atomic_replace(target_path, &encoded)?;
 
         info!(
             "Saved vector index snapshot ({} bytes) to {}",
@@ -204,9 +200,19 @@ impl VectorStore {
             )));
         }
 
-        let bytes = std::fs::read(target_path)?;
-        let index: VectorIndex = bincode::deserialize(&bytes)
-            .map_err(|e| VectorError::Deserialization(e.to_string()))?;
+        let (identity, index) = persist::load_snapshot(target_path)?;
+
+        if let Some(identity) = identity
+            && (identity.model != embedder.model_name()
+                || identity.dimension != embedder.dimension())
+        {
+            return Err(VectorError::IdentityMismatch {
+                snapshot_model: identity.model,
+                snapshot_dimension: identity.dimension,
+                source_model: embedder.model_name().to_string(),
+                source_dimension: embedder.dimension(),
+            });
+        }
 
         if index.dimension() != embedder.dimension() {
             return Err(VectorError::DimensionMismatch {

@@ -1,6 +1,7 @@
 pub mod embedder;
 pub mod index;
 pub mod math;
+mod persist;
 pub mod store;
 
 #[cfg(feature = "local-embed")]

@@ -1,10 +1,36 @@
+use async_trait::async_trait;
+use mao_agent::VectorError;
 use mao_agent::model::{
     Document, DocumentChunk, DocumentMetadata, HistoricalPeriod, VectorEntry, VectorFilter,
 };
-use mao_agent::vector::embedder::{DeterministicEmbedder, create_embedder_arc};
+use mao_agent::vector::embedder::{DeterministicEmbedder, Embedder, create_embedder_arc};
 use mao_agent::vector::index::VectorIndex;
 use mao_agent::vector::store::VectorStore;
 use tempfile::tempdir;
+
+/// Same dimension as DeterministicEmbedder, different model_name — for identity checks.
+struct OtherModelEmbedder {
+    dimension: usize,
+}
+
+#[async_trait]
+impl Embedder for OtherModelEmbedder {
+    async fn embed(&self, _text: &str) -> mao_agent::Result<Vec<f32>> {
+        Ok(vec![0.0; self.dimension])
+    }
+
+    async fn embed_batch(&self, texts: &[String]) -> mao_agent::Result<Vec<Vec<f32>>> {
+        Ok(texts.iter().map(|_| vec![0.0; self.dimension]).collect())
+    }
+
+    fn dimension(&self) -> usize {
+        self.dimension
+    }
+
+    fn model_name(&self) -> &str {
+        "other-model"
+    }
+}
 
 fn make_test_chunk(
     id: &str,
@@ -212,7 +238,10 @@ async fn test_load_rejects_dimension_mismatch() {
     store.save_to_file(&index_file).await.unwrap();
 
     let embedder = create_embedder_arc(DeterministicEmbedder::new(64));
-    let err = VectorStore::load_from_file(&index_file, embedder).unwrap_err();
+    let err = match VectorStore::load_from_file(&index_file, embedder) {
+        Err(e) => e,
+        Ok(_) => panic!("expected error on dimension mismatch"),
+    };
     match err {
         VectorError::DimensionMismatch { .. } | VectorError::IdentityMismatch { .. } => {}
         other => panic!("expected DimensionMismatch or IdentityMismatch, got {other:?}"),
@@ -228,7 +257,10 @@ async fn test_load_rejects_identity_mismatch_same_dim_different_model() {
     store.save_to_file(&index_file).await.unwrap();
 
     let embedder = create_embedder_arc(OtherModelEmbedder { dimension: 128 });
-    let err = VectorStore::load_from_file(&index_file, embedder).unwrap_err();
+    let err = match VectorStore::load_from_file(&index_file, embedder) {
+        Err(e) => e,
+        Ok(_) => panic!("expected error on identity mismatch"),
+    };
     let msg = err.to_string();
     assert!(msg.contains("ingest"), "{msg}");
     match err {
