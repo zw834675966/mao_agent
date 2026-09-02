@@ -1,0 +1,6 @@
+# Copy to config.toml (gitignored) and fill in the key.
+# Do not commit config.toml.
+
+[cohere]
+api_key = "qmGzXYmMLjVkNhokZx4t2C2LyRwoHmGY0BGRVM15"
+# base_url = "https://api.cohere.ai/compatibility/v1"
