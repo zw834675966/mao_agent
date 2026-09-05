@@ -107,6 +107,14 @@ pub struct SearchArgs {
     #[arg(long, default_value_t = 0.0)]
     pub min_score: f32,
 
+    /// Disable Cohere rerank (keep fused RRF order truncated to top_k)
+    #[arg(long)]
+    pub no_rerank: bool,
+
+    /// Cohere rerank model (default: rerank-v3.5)
+    #[arg(long, env = "COHERE_RERANK_MODEL")]
+    pub rerank_model: Option<String>,
+
     #[command(flatten)]
     pub embedder: EmbedderArgs,
 }
@@ -164,6 +172,14 @@ pub struct AskArgs {
     #[arg(long, default_value = COHERE_CHAT_MODEL)]
     pub model: String,
 
+    /// Disable Cohere rerank after hybrid fusion
+    #[arg(long)]
+    pub no_rerank: bool,
+
+    /// Cohere rerank model (default: rerank-v3.5)
+    #[arg(long, env = "COHERE_RERANK_MODEL")]
+    pub rerank_model: Option<String>,
+
     #[command(flatten)]
     pub embedder: EmbedderArgs,
 }
@@ -194,6 +210,14 @@ pub struct ServeArgs {
     /// Chat model id
     #[arg(long, default_value = COHERE_CHAT_MODEL)]
     pub model: String,
+
+    /// Disable Cohere rerank for hybrid search endpoints
+    #[arg(long)]
+    pub no_rerank: bool,
+
+    /// Cohere rerank model (default: rerank-v3.5)
+    #[arg(long, env = "COHERE_RERANK_MODEL")]
+    pub rerank_model: Option<String>,
 
     #[command(flatten)]
     pub embedder: EmbedderArgs,

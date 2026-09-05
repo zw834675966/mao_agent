@@ -3,6 +3,7 @@ use std::time::Instant;
 use axum::{Json, extract::State, http::StatusCode};
 
 use crate::model::VectorFilter;
+use crate::rerank::rerank_or_fallback;
 use crate::server::dto::{SearchHit, SearchRequest, SearchResponse};
 use crate::server::error::{ApiError, ApiResult};
 use crate::server::state::AppState;
@@ -80,6 +81,7 @@ pub async fn handle_search(
                     rrf_score: None,
                     vector_score: Some(r.score),
                     bm25_score: None,
+                    rerank_score: None,
                     chunk: r.chunk,
                 })
                 .collect();
@@ -102,13 +104,14 @@ pub async fn handle_search(
                     rrf_score: None,
                     vector_score: None,
                     bm25_score: Some(r.score),
+                    rerank_score: None,
                     chunk: r.chunk,
                 })
                 .collect();
             (hits, "bm25")
         }
         _ => {
-            // hybrid: RRF fuse
+            // hybrid: RRF fuse (top_k*2) then optional rerank → top_k
             let vec_results = state
                 .store
                 .search(&req.query, top_k * 2, filter.as_ref())
@@ -125,7 +128,14 @@ pub async fn handle_search(
             } else {
                 Vec::new()
             };
-            let fused = state.hybrid.fuse(vec_results, bm25_results, top_k);
+            let fused = state.hybrid.fuse(vec_results, bm25_results, top_k * 2);
+            let skip_rerank = req.no_rerank.unwrap_or(false);
+            let reranker = if skip_rerank {
+                None
+            } else {
+                state.reranker.as_deref()
+            };
+            let fused = rerank_or_fallback(fused, reranker, &req.query, top_k).await;
             let mut hits: Vec<SearchHit> = fused
                 .into_iter()
                 .map(|r| SearchHit {
@@ -134,6 +144,7 @@ pub async fn handle_search(
                     rrf_score: Some(r.rrf_score),
                     vector_score: r.vector_score,
                     bm25_score: r.bm25_score,
+                    rerank_score: r.rerank_score,
                     chunk: r.chunk,
                 })
                 .collect();

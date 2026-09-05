@@ -71,6 +71,40 @@ fn resolve_chat_api_key(cli_key: Option<String>, offline: bool) -> Option<String
     config_cohere_api_key()
 }
 
+fn resolve_rerank_api_key(cli_key: Option<&str>, offline: bool, no_rerank: bool) -> Option<String> {
+    if offline || no_rerank {
+        return None;
+    }
+    if let Some(key) = nonempty_key(cli_key) {
+        return Some(key.to_string());
+    }
+    if let Ok(key) = std::env::var("COHERE_API_KEY")
+        && let Some(key) = nonempty_key(Some(key.as_str()))
+    {
+        return Some(key.to_string());
+    }
+    if let Ok(key) = std::env::var("EMBED_API_KEY")
+        && let Some(key) = nonempty_key(Some(key.as_str()))
+    {
+        return Some(key.to_string());
+    }
+    config_cohere_api_key()
+}
+
+fn make_reranker(
+    offline: bool,
+    no_rerank: bool,
+    rerank_model: Option<String>,
+    api_key_hint: Option<&str>,
+) -> Option<std::sync::Arc<dyn mao_agent::Reranker>> {
+    let key = resolve_rerank_api_key(api_key_hint, offline, no_rerank)?;
+    Some(std::sync::Arc::new(mao_agent::CohereReranker::new(
+        key,
+        rerank_model,
+        None,
+    )))
+}
+
 fn get_embedder(
     args: &EmbedderArgs,
     cache_path: Option<&Path>,
@@ -316,9 +350,19 @@ fn print_hybrid_results(results: &[mao_agent::index::HybridSearchResult]) {
             .bm25_score
             .map(|s| format!("{:.2}", s))
             .unwrap_or_else(|| "N/A".into());
+        let rerank_str = res
+            .rerank_score
+            .map(|s| format!("{:.4}", s))
+            .unwrap_or_else(|| "N/A".into());
         println!(
-            "🏆 [Rank {}] RRF得分: {:.5} (向量: {}, BM25: {}) | 《{}》 ({})",
-            res.rank, res.rrf_score, vec_str, bm25_str, res.chunk.doc_title, res.chunk.date
+            "🏆 [Rank {}] RRF得分: {:.5} (向量: {}, BM25: {}, Rerank: {}) | 《{}》 ({})",
+            res.rank,
+            res.rrf_score,
+            vec_str,
+            bm25_str,
+            rerank_str,
+            res.chunk.doc_title,
+            res.chunk.date
         );
         println!(
             "📌 时期: {} | 卷册: {}",
@@ -366,13 +410,25 @@ async fn search_hybrid(
     };
 
     let coordinator = mao_agent::index::HybridSearchCoordinator::default();
-    let hybrid_results = coordinator.fuse(vec_results, bm25_results, args.top_k);
+    let fused = coordinator.fuse(vec_results, bm25_results, args.top_k * 2);
+    let reranker = make_reranker(
+        args.embedder.offline,
+        args.no_rerank,
+        args.rerank_model.clone(),
+        args.embedder.embed_api_key.as_deref(),
+    );
+    let rerank_start = std::time::Instant::now();
+    let hybrid_results =
+        mao_agent::rerank_or_fallback(fused, reranker.as_deref(), &args.query, args.top_k).await;
     let duration = start.elapsed();
     println!(
         "⚡ 双路混合 (BM25 + 向量 RRF) 检索耗时: {:.2?}，融合召回 {} 条结果\n",
         duration,
         hybrid_results.len()
     );
+    if reranker.is_some() {
+        println!("⚡ Rerank 耗时: {:.2?}\n", rerank_start.elapsed());
+    }
 
     print_hybrid_results(&hybrid_results);
     Ok(())
@@ -590,12 +646,21 @@ async fn handle_ask(args: &AskArgs) -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let filter = build_filter(args.period.as_deref(), None, None);
+    let reranker = make_reranker(
+        args.embedder.offline,
+        args.no_rerank,
+        args.rerank_model.clone(),
+        args.api_key
+            .as_deref()
+            .or(args.embedder.embed_api_key.as_deref()),
+    );
     let agent = mao_agent::agent::DialecticalAgent::new(
         store,
         ft_index,
         Some(args.base_url.clone()),
         resolve_chat_api_key(args.api_key.clone(), args.embedder.offline),
         Some(args.model.clone()),
+        reranker,
     );
 
     println!("\n🧠 【Mao Agent 辩证认知推理引擎】");
@@ -696,10 +761,27 @@ async fn handle_serve(args: &ServeArgs) -> Result<(), Box<dyn std::error::Error>
     println!();
 
     let hybrid = mao_agent::index::HybridSearchCoordinator::default();
+    let reranker = make_reranker(
+        args.embedder.offline,
+        args.no_rerank,
+        args.rerank_model.clone(),
+        args.api_key
+            .as_deref()
+            .or(args.embedder.embed_api_key.as_deref()),
+    );
+    println!(
+        " • Rerank:             {}",
+        if reranker.is_some() {
+            "已启用 (Cohere)"
+        } else {
+            "未启用 (offline / --no-rerank / 无 key)"
+        }
+    );
     mao_agent::server::serve(
         store,
         tantivy,
         hybrid,
+        reranker,
         chat_base_url,
         chat_api_key,
         chat_model,

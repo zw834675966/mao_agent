@@ -69,6 +69,7 @@ async fn test_state() -> AppState {
         store,
         Some(Arc::new(ft)),
         HybridSearchCoordinator::default(),
+        None,
         "http://127.0.0.1:9".to_string(),
         None,
         "test-model".to_string(),
@@ -89,6 +90,7 @@ fn search_req(query: &str, mode: &str) -> SearchRequest {
         doc_id: None,
         keyword: None,
         min_score: None,
+        no_rerank: None,
     }
 }
 

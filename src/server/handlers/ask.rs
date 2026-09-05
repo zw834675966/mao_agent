@@ -73,6 +73,7 @@ async fn handle_ask_inner(
         Some(base_url),
         api_key,
         Some(model),
+        state.reranker.clone(),
     );
     let answer = agent
         .ask(&req.question, top_k, filter.as_ref())
@@ -134,12 +135,13 @@ pub async fn handle_ask_stream(
     let stream = async_stream::stream! {
         let start = Instant::now();
         let agent = DialecticalAgent::new(
-            Arc::clone(&state.store),
-            state.tantivy.clone(),
-            Some(base_url),
-            api_key,
-            Some(model),
-        );
+        Arc::clone(&state.store),
+        state.tantivy.clone(),
+        Some(base_url),
+        api_key,
+        Some(model),
+        state.reranker.clone(),
+    );
 
         // 1) Retrieve + generate (reuses DialecticalAgent::ask for now; future: true streaming LLM)
         let answer = match agent.ask(&question, top_k, filter.as_ref()).await {

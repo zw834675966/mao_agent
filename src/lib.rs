@@ -24,7 +24,9 @@ pub use model::{
     Document, DocumentChunk, DocumentMetadata, HistoricalPeriod, VectorEntry, VectorFilter,
     VectorSearchResult, VectorStoreStats,
 };
-pub use rerank::{COHERE_RERANK_MODEL, COHERE_RERANK_URL, CohereReranker, Reranker};
+pub use rerank::{
+    COHERE_RERANK_MODEL, COHERE_RERANK_URL, CohereReranker, Reranker, rerank_or_fallback,
+};
 #[cfg(feature = "local-embed")]
 pub use vector::FastEmbedder;
 pub use vector::{

@@ -15,6 +15,7 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 
 use crate::index::HybridSearchCoordinator;
+use crate::rerank::Reranker;
 
 use self::state::AppState;
 
@@ -42,10 +43,12 @@ pub fn build_router(state: AppState) -> Router {
         .layer(TraceLayer::new_for_http())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn serve(
     store: Arc<crate::vector::VectorStore>,
     tantivy: Option<Arc<crate::index::FullTextIndex>>,
     hybrid: HybridSearchCoordinator,
+    reranker: Option<Arc<dyn Reranker>>,
     chat_base_url: String,
     chat_api_key: Option<String>,
     chat_model: String,
@@ -55,6 +58,7 @@ pub async fn serve(
         store,
         tantivy,
         hybrid,
+        reranker,
         chat_base_url,
         chat_api_key,
         chat_model,
@@ -71,3 +75,4 @@ pub async fn serve(
     axum::serve(listener, app).await?;
     Ok(())
 }
+

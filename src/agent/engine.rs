@@ -4,6 +4,7 @@ use crate::error::{Result, VectorError};
 use crate::index::fulltext::FullTextIndex;
 use crate::index::hybrid::HybridSearchCoordinator;
 use crate::model::{DocumentChunk, VectorFilter};
+use crate::rerank::{Reranker, rerank_or_fallback};
 use crate::vector::embedder::join_openai_path;
 use crate::vector::store::VectorStore;
 use regex::Regex;
@@ -36,6 +37,7 @@ pub struct DialecticalAgent {
     base_url: String,
     api_key: Option<String>,
     model_name: String,
+    reranker: Option<Arc<dyn Reranker>>,
 }
 
 #[derive(Serialize)]
@@ -73,6 +75,7 @@ impl DialecticalAgent {
         base_url: Option<String>,
         api_key: Option<String>,
         model_name: Option<String>,
+        reranker: Option<Arc<dyn Reranker>>,
     ) -> Self {
         Self {
             store,
@@ -90,6 +93,7 @@ impl DialecticalAgent {
             api_key,
             model_name: model_name
                 .unwrap_or_else(|| crate::vector::embedder::COHERE_CHAT_MODEL.to_string()),
+            reranker,
         }
     }
 
@@ -114,8 +118,10 @@ impl DialecticalAgent {
             };
             let fused = self
                 .hybrid_coordinator
-                .fuse(vec_results, bm25_results, top_k);
-            fused.into_iter().map(|r| r.chunk).collect()
+                .fuse(vec_results, bm25_results, top_k * 2);
+            let reranked =
+                rerank_or_fallback(fused, self.reranker.as_deref(), question, top_k).await;
+            reranked.into_iter().map(|r| r.chunk).collect()
         } else {
             let search_results = self.store.search(question, top_k, filter).await?;
             search_results.into_iter().map(|r| r.chunk).collect()
@@ -333,7 +339,7 @@ mod tests {
 
         store.index_document(&doc).await.unwrap();
 
-        let agent = DialecticalAgent::new(store, None, None, None, None);
+        let agent = DialecticalAgent::new(store, None, None, None, None, None);
         let answer = agent
             .ask("抗日战争为什么是持久战？", 3, None)
             .await
@@ -352,7 +358,7 @@ mod tests {
     #[tokio::test]
     async fn test_empty_retrieval_is_not_fully_grounded() {
         let store = Arc::new(VectorStore::new_deterministic(64));
-        let agent = DialecticalAgent::new(store, None, None, None, None);
+        let agent = DialecticalAgent::new(store, None, None, None, None, None);
         let answer = agent.ask("语料库里不存在的问题", 3, None).await.unwrap();
 
         assert!(answer.retrieved_chunks.is_empty());

@@ -34,6 +34,9 @@ pub struct SearchRequest {
     /// 最小相似度阈值，低于此分数的结果被过滤（仅 vector/hybrid 有效）
     #[serde(default)]
     pub min_score: Option<f32>,
+    /// When true, skip Cohere rerank for this request (default false).
+    #[serde(default)]
+    pub no_rerank: Option<bool>,
 }
 
 fn default_top_k() -> usize {
@@ -62,6 +65,8 @@ pub struct SearchHit {
     pub vector_score: Option<f32>,
     /// BM25 分数
     pub bm25_score: Option<f32>,
+    /// Cohere (or other) rerank relevance score when applied.
+    pub rerank_score: Option<f32>,
     pub chunk: DocumentChunk,
 }
 

@@ -78,7 +78,7 @@ async fn test_dialectical_agent_e2e() {
 
     store.index_document(&doc).await.unwrap();
 
-    let agent = DialecticalAgent::new(store, None, None, None, None);
+    let agent = DialecticalAgent::new(store, None, None, None, None, None);
     let answer = agent
         .ask("如何抓住复杂事物中的主要矛盾？", 3, None)
         .await
@@ -124,7 +124,7 @@ async fn test_dialectical_agent_with_hybrid_search() {
     store.index_document(&doc).await.unwrap();
     ft_index.insert_batch(&chunks).unwrap();
 
-    let agent = DialecticalAgent::new(store, Some(ft_index), None, None, None);
+    let agent = DialecticalAgent::new(store, Some(ft_index), None, None, None, None);
     let answer = agent
         .ask("兵民是胜利之本在持久战中的作用？", 3, None)
         .await
