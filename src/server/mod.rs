@@ -75,4 +75,3 @@ pub async fn serve(
     axum::serve(listener, app).await?;
     Ok(())
 }
-

@@ -29,7 +29,10 @@
 ## Cycle 3–6
 
 - [x] TODO-09..10: HNSW + regression
-- [ ] Cycle 4: SSE reranked + api_test
+- [x] Cycle 4: SSE reranked + api_test
+  - `SseRerankedEvent { applied, chunk_ids, scores? }` always after `retrieved`
+  - `test_ask_stream_emits_event_sequence` expects retrieved → reranked → delta → citation → done
+  - MockReranker / `no_rerank` / None-reranker search tests + concurrency smoke
 - [ ] Cycle 5: citation adversarial
 - [ ] Cycle 6: cleanup → 70+ tests
 

@@ -112,6 +112,18 @@ pub struct SseRetrievedEvent {
     pub chunks: Vec<DocumentChunk>,
 }
 
+/// SSE payload after retrieval: final evidence order and whether rerank was configured.
+#[derive(Debug, Serialize)]
+pub struct SseRerankedEvent {
+    /// True when AppState has a reranker (hybrid ask path may apply it).
+    pub applied: bool,
+    /// Chunk IDs in final evidence order (post-rerank when applied).
+    pub chunk_ids: Vec<String>,
+    /// Optional per-chunk rerank scores (same order as chunk_ids); omitted when not available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scores: Option<Vec<f32>>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct SseDeltaEvent {
     pub delta: String,

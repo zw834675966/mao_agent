@@ -12,7 +12,8 @@ use futures::stream::Stream;
 use crate::agent::DialecticalAgent;
 use crate::model::VectorFilter;
 use crate::server::dto::{
-    AskRequest, AskResponse, SseCitationEvent, SseDeltaEvent, SseDoneEvent, SseRetrievedEvent,
+    AskRequest, AskResponse, SseCitationEvent, SseDeltaEvent, SseDoneEvent, SseRerankedEvent,
+    SseRetrievedEvent,
 };
 use crate::server::error::{ApiError, ApiResult};
 use crate::server::state::AppState;
@@ -156,6 +157,21 @@ pub async fn handle_ask_stream(
         // event: retrieved
         if let Ok(data) = serde_json::to_string(&SseRetrievedEvent { chunks: answer.retrieved_chunks.clone() }) {
             yield Ok(Event::default().event("retrieved").data(data));
+        }
+
+        // event: reranked — always emit final evidence order; applied when AppState has a reranker
+        let chunk_ids: Vec<String> = answer
+            .retrieved_chunks
+            .iter()
+            .map(|c| c.chunk_id.clone())
+            .collect();
+        let applied = state.reranker.is_some();
+        if let Ok(data) = serde_json::to_string(&SseRerankedEvent {
+            applied,
+            chunk_ids,
+            scores: None,
+        }) {
+            yield Ok(Event::default().event("reranked").data(data));
         }
 
         // event: delta — split by lines to simulate streaming stages

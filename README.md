@@ -150,7 +150,7 @@ cargo run -- serve --offline --bind 127.0.0.1:3000
 | `GET /api/v1/stats` | 向量库统计（时期/卷册分布、内存预估） |
 | `POST /api/v1/search` | 原子检索：`{query, top_k≤20, mode: hybrid\|vector\|bm25, period/volume/category/tags/start_date/end_date/doc_id/keyword, min_score, no_rerank}`；hybrid 结果可含 `rerank_score` |
 | `POST /api/v1/ask` | 端到端推演（阻塞 JSON）：`{question, top_k≤10, period/volume, base_url/model/api_key}`，`api_key` 也可走 `Authorization: Bearer` 头 |
-| `POST /api/v1/ask/stream` | 端到端推演（SSE）：事件 `retrieved → delta(stage) → citation → done` |
+| `POST /api/v1/ask/stream` | 端到端推演（SSE）：事件 `retrieved → reranked → delta(stage) → citation → done` |
 | `POST /api/v1/verify`（别名 `/api/v1/citation/verify`） | 引文核验：`{quote, claimed_title, context_chunks, min_confidence}`，返回真子串/模糊匹配报告 |
 
 ```bash
@@ -159,7 +159,7 @@ curl -X POST http://127.0.0.1:3000/api/v1/search \
   -H 'Content-Type: application/json' \
   -d '{"query":"持久战三个阶段","top_k":3,"mode":"hybrid"}'
 
-# SSE 推演示例（retrieved → delta → citation → done）
+# SSE 推演示例（retrieved → reranked → delta → citation → done）
 curl -N -X POST http://127.0.0.1:3000/api/v1/ask/stream \
   -H 'Content-Type: application/json' \
   -d '{"question":"抗日战争为什么是持久战？","top_k":2}'

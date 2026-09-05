@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use axum::{Json, extract::State, http::HeaderMap};
-use mao_agent::index::{FullTextIndex, HybridSearchCoordinator};
+use mao_agent::index::{FullTextIndex, HybridSearchCoordinator, HybridSearchResult};
 use mao_agent::model::{Document, DocumentMetadata, HistoricalPeriod};
+use mao_agent::rerank::Reranker;
 use mao_agent::server::dto::{AskRequest, SearchRequest, VerifyRequest};
 use mao_agent::server::handlers::{ask, health, search, verify};
 use mao_agent::server::state::AppState;
@@ -270,15 +272,174 @@ async fn test_ask_stream_emits_event_sequence() {
     let text = String::from_utf8(bytes.to_vec()).unwrap();
     for evt in [
         "event: retrieved",
+        "event: reranked",
         "event: delta",
         "event: citation",
         "event: done",
     ] {
         assert!(text.contains(evt), "stream missing {evt}:\n{text}");
     }
-    // event order: retrieved < delta < citation < done
+    // event order: retrieved < reranked < delta < citation < done
     let pos = |m: &str| text.find(m).unwrap();
-    assert!(pos("event: retrieved") < pos("event: delta"));
+    assert!(pos("event: retrieved") < pos("event: reranked"));
+    assert!(pos("event: reranked") < pos("event: delta"));
     assert!(pos("event: delta") < pos("event: citation"));
     assert!(pos("event: citation") < pos("event: done"));
+    // no reranker in test_state → applied=false
+    assert!(
+        text.contains("\"applied\":false") || text.contains("\"applied\": false"),
+        "reranked should report applied=false without AppState.reranker:\n{text}"
+    );
+}
+
+/// Mock reranker that reverses candidate order and stamps scores (no network).
+struct ApiMockReranker;
+
+#[async_trait]
+impl Reranker for ApiMockReranker {
+    fn model_name(&self) -> &str {
+        "api-mock"
+    }
+
+    async fn rerank(
+        &self,
+        _query: &str,
+        candidates: &[HybridSearchResult],
+        top_k: usize,
+    ) -> mao_agent::error::Result<Vec<HybridSearchResult>> {
+        let mut out = candidates.to_vec();
+        out.reverse();
+        for (i, item) in out.iter_mut().enumerate() {
+            item.rerank_score = Some(1.0 - i as f32 * 0.1);
+            item.rank = i + 1;
+        }
+        out.truncate(top_k);
+        Ok(out)
+    }
+}
+
+async fn test_state_with_reranker() -> AppState {
+    let docs = [doc_lun_chi_jiu_zhan(), doc_mao_dun_lun()];
+    let store = Arc::new(VectorStore::new_deterministic(128));
+    for d in &docs {
+        store.index_document(d).await.unwrap();
+    }
+    let chunker = mao_agent::corpus::ChineseSemanticChunker::new(Default::default());
+    let ft = FullTextIndex::new_in_ram().unwrap();
+    for d in &docs {
+        ft.insert_batch(&chunker.chunk_document(d)).unwrap();
+    }
+    AppState::new(
+        store,
+        Some(Arc::new(ft)),
+        HybridSearchCoordinator::default(),
+        Some(Arc::new(ApiMockReranker)),
+        "http://127.0.0.1:9".to_string(),
+        None,
+        "test-model".to_string(),
+    )
+}
+
+#[tokio::test]
+async fn test_search_mock_reranker_sets_scores() {
+    let state = test_state_with_reranker().await;
+    let (_s, Json(body)) =
+        search::handle_search(State(state), Json(search_req("持久战的三个阶段", "hybrid")))
+            .await
+            .unwrap();
+    assert!(!body.results.is_empty());
+    assert!(
+        body.results.iter().any(|h| h.rerank_score.is_some()),
+        "MockReranker should populate rerank_score"
+    );
+}
+
+#[tokio::test]
+async fn test_search_no_rerank_skips_scores() {
+    let state = test_state_with_reranker().await;
+    let mut req = search_req("持久战的三个阶段", "hybrid");
+    req.no_rerank = Some(true);
+    let (_s, Json(body)) = search::handle_search(State(state), Json(req))
+        .await
+        .unwrap();
+    assert!(!body.results.is_empty());
+    assert!(
+        body.results.iter().all(|h| h.rerank_score.is_none()),
+        "no_rerank=true must leave rerank_score unset"
+    );
+}
+
+#[tokio::test]
+async fn test_search_without_reranker_degrades() {
+    let state = test_state().await;
+    assert!(state.reranker.is_none());
+    let (_s, Json(body)) =
+        search::handle_search(State(state), Json(search_req("持久战", "hybrid")))
+            .await
+            .unwrap();
+    assert!(!body.results.is_empty());
+    assert!(body.results.iter().all(|h| h.rerank_score.is_none()));
+}
+
+#[tokio::test]
+async fn test_ask_stream_reports_rerank_applied() {
+    use axum::response::IntoResponse;
+    let state = test_state_with_reranker().await;
+    let req = AskRequest {
+        question: "test".to_string(),
+        top_k: Some(1),
+        period: None,
+        volume: None,
+        base_url: None,
+        model: None,
+        api_key: None,
+    };
+    let sse = ask::handle_ask_stream(State(state), HeaderMap::new(), Json(req))
+        .await
+        .unwrap();
+    let resp = sse.into_response();
+    let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let text = String::from_utf8(bytes.to_vec()).unwrap();
+    assert!(text.contains("event: reranked"));
+    assert!(
+        text.contains("\"applied\":true") || text.contains("\"applied\": true"),
+        "with AppState.reranker, applied should be true:\n{text}"
+    );
+}
+
+#[tokio::test]
+async fn test_handler_concurrency_smoke() {
+    let state = test_state().await;
+    let mut handles = Vec::new();
+    for i in 0..50 {
+        let s = state.clone();
+        handles.push(tokio::spawn(async move {
+            if i % 2 == 0 {
+                search::handle_search(State(s), Json(search_req("持久战", "hybrid")))
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| e.status)
+            } else {
+                let req = AskRequest {
+                    question: "抗日战争为什么是持久战？".to_string(),
+                    top_k: Some(1),
+                    period: None,
+                    volume: None,
+                    base_url: None,
+                    model: None,
+                    api_key: None,
+                };
+                ask::handle_ask(State(s), HeaderMap::new(), Json(req))
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| e.status)
+            }
+        }));
+    }
+    for h in handles {
+        let r = h.await.expect("join");
+        assert!(r.is_ok(), "handler returned err: {r:?}");
+    }
 }

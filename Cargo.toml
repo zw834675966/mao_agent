@@ -53,5 +53,6 @@ default = ["local-embed"]
 local-embed = ["dep:fastembed"]
 
 [dev-dependencies]
+async-trait = "0.1"
 tempfile = "3.16"
 wiremock = "0.6.5"
