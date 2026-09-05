@@ -285,10 +285,14 @@ async fn test_ask_stream_emits_event_sequence() {
     assert!(pos("event: reranked") < pos("event: delta"));
     assert!(pos("event: delta") < pos("event: citation"));
     assert!(pos("event: citation") < pos("event: done"));
-    // no reranker in test_state → applied=false
+    // no reranker in test_state → applied=false; scores omitted
     assert!(
         text.contains("\"applied\":false") || text.contains("\"applied\": false"),
         "reranked should report applied=false without AppState.reranker:\n{text}"
+    );
+    assert!(
+        !text.contains("\"scores\""),
+        "scores must be absent/None when rerank not applied:\n{text}"
     );
 }
 
@@ -405,7 +409,30 @@ async fn test_ask_stream_reports_rerank_applied() {
     assert!(text.contains("event: reranked"));
     assert!(
         text.contains("\"applied\":true") || text.contains("\"applied\": true"),
-        "with AppState.reranker, applied should be true:\n{text}"
+        "with MockReranker, applied should be true from stamped scores:\n{text}"
+    );
+    // Parse the reranked event data line and assert non-empty scores array
+    let mut scores_ok = false;
+    let mut lines = text.lines().peekable();
+    while let Some(line) = lines.next() {
+        if line.trim() == "event: reranked"
+            && let Some(data_line) = lines.next()
+        {
+            let payload = data_line.strip_prefix("data:").unwrap_or(data_line).trim();
+            let v: serde_json::Value = serde_json::from_str(payload)
+                .unwrap_or_else(|e| panic!("reranked JSON parse failed: {e}; payload={payload}"));
+            let scores = v.get("scores").and_then(|s| s.as_array());
+            assert!(
+                scores.is_some() && !scores.unwrap().is_empty(),
+                "scores must be a non-empty array when MockReranker applied:\n{payload}"
+            );
+            scores_ok = true;
+            break;
+        }
+    }
+    assert!(
+        scores_ok,
+        "did not find parseable reranked event with scores:\n{text}"
     );
 }
 

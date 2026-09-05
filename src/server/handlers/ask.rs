@@ -161,17 +161,16 @@ pub async fn handle_ask_stream(
             yield Ok(Event::default().event("retrieved").data(data));
         }
 
-        // event: reranked — always emit final evidence order; applied when AppState has a reranker
+        // event: reranked — always emit final evidence order; applied when scores were stamped
         let chunk_ids: Vec<String> = answer
             .retrieved_chunks
             .iter()
             .map(|c| c.chunk_id.clone())
             .collect();
-        let applied = state.reranker.is_some();
         if let Ok(data) = serde_json::to_string(&SseRerankedEvent {
-            applied,
+            applied: answer.rerank_applied,
             chunk_ids,
-            scores: None,
+            scores: answer.rerank_scores.clone(),
         }) {
             yield Ok(Event::default().event("reranked").data(data));
         }

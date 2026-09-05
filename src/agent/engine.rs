@@ -25,6 +25,10 @@ pub struct AgentAnswer {
     pub retrieved_chunks: Vec<DocumentChunk>,
     pub citation_reports: Vec<VerificationReport>,
     pub is_fully_grounded: bool,
+    /// True iff at least one hybrid result after rerank_or_fallback has a stamped rerank_score.
+    pub rerank_applied: bool,
+    /// Per-chunk rerank scores in the same order as retrieved_chunks; None when not applied.
+    pub rerank_scores: Option<Vec<f32>>,
 }
 
 /// Dialectical Reasoning Agent orchestrating hybrid retrieval, LLM synthesis, and citation verification.
@@ -107,7 +111,11 @@ impl DialecticalAgent {
         info!("DialecticalAgent processing query: {}", question);
 
         // 1. Retrieve evidence chunks (Hybrid search if FullTextIndex is configured, otherwise Vector search)
-        let retrieved_chunks: Vec<DocumentChunk> = if let Some(ref ft) = self.fulltext_index {
+        let (retrieved_chunks, rerank_applied, rerank_scores): (
+            Vec<DocumentChunk>,
+            bool,
+            Option<Vec<f32>>,
+        ) = if let Some(ref ft) = self.fulltext_index {
             let vec_results = self.store.search(question, top_k * 2, filter).await?;
             let bm25_results = match ft.search(question, top_k * 2, filter) {
                 Ok(results) => results,
@@ -121,10 +129,23 @@ impl DialecticalAgent {
                 .fuse(vec_results, bm25_results, top_k * 2);
             let reranked =
                 rerank_or_fallback(fused, self.reranker.as_deref(), question, top_k).await;
-            reranked.into_iter().map(|r| r.chunk).collect()
+            let applied = reranked.iter().any(|r| r.rerank_score.is_some());
+            let scores = if applied {
+                Some(
+                    reranked
+                        .iter()
+                        .map(|r| r.rerank_score.unwrap_or(0.0))
+                        .collect(),
+                )
+            } else {
+                None
+            };
+            let chunks = reranked.into_iter().map(|r| r.chunk).collect();
+            (chunks, applied, scores)
         } else {
             let search_results = self.store.search(question, top_k, filter).await?;
-            search_results.into_iter().map(|r| r.chunk).collect()
+            let chunks = search_results.into_iter().map(|r| r.chunk).collect();
+            (chunks, false, None)
         };
 
         if retrieved_chunks.is_empty() {
@@ -134,6 +155,8 @@ impl DialecticalAgent {
                 retrieved_chunks: Vec::new(),
                 citation_reports: Vec::new(),
                 is_fully_grounded: false,
+                rerank_applied: false,
+                rerank_scores: None,
             });
         }
 
@@ -162,6 +185,8 @@ impl DialecticalAgent {
             retrieved_chunks,
             citation_reports,
             is_fully_grounded,
+            rerank_applied,
+            rerank_scores,
         })
     }
 

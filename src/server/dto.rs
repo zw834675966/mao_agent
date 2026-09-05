@@ -112,10 +112,10 @@ pub struct SseRetrievedEvent {
     pub chunks: Vec<DocumentChunk>,
 }
 
-/// SSE payload after retrieval: final evidence order and whether rerank was configured.
+/// SSE payload after retrieval: final evidence order and whether rerank stamped scores.
 #[derive(Debug, Serialize)]
 pub struct SseRerankedEvent {
-    /// True when AppState has a reranker (hybrid ask path may apply it).
+    /// True when rerank actually stamped scores onto results (not merely AppState.reranker presence).
     pub applied: bool,
     /// Chunk IDs in final evidence order (post-rerank when applied).
     pub chunk_ids: Vec<String>,
