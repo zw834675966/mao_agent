@@ -1,11 +1,11 @@
-use crate::agent::prompt::{DIALECTICAL_SYSTEM_PROMPT, build_rag_user_prompt};
+use crate::agent::llm::{FallbackLlmClient, LlmClient};
+use crate::agent::prompt::build_rag_user_prompt;
 use crate::agent::verifier::{CitationVerifier, VerificationReport};
-use crate::error::{Result, VectorError};
+use crate::error::Result;
 use crate::index::fulltext::FullTextIndex;
 use crate::index::hybrid::HybridSearchCoordinator;
 use crate::model::{DocumentChunk, VectorFilter};
 use crate::rerank::{Reranker, rerank_or_fallback};
-use crate::vector::embedder::join_openai_path;
 use crate::vector::store::VectorStore;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -37,39 +37,8 @@ pub struct DialecticalAgent {
     fulltext_index: Option<Arc<FullTextIndex>>,
     hybrid_coordinator: HybridSearchCoordinator,
     verifier: CitationVerifier,
-    client: reqwest::Client,
-    base_url: String,
-    api_key: Option<String>,
-    model_name: String,
+    llm: Arc<dyn LlmClient>,
     reranker: Option<Arc<dyn Reranker>>,
-}
-
-#[derive(Serialize)]
-struct ChatMessage<'a> {
-    role: &'a str,
-    content: &'a str,
-}
-
-#[derive(Serialize)]
-struct ChatCompletionRequest<'a> {
-    model: &'a str,
-    messages: Vec<ChatMessage<'a>>,
-    temperature: f32,
-}
-
-#[derive(Deserialize)]
-struct ChatCompletionResponse {
-    choices: Vec<ChatChoice>,
-}
-
-#[derive(Deserialize)]
-struct ChatChoice {
-    message: ChatResponseMessage,
-}
-
-#[derive(Deserialize)]
-struct ChatResponseMessage {
-    content: String,
 }
 
 impl DialecticalAgent {
@@ -81,22 +50,21 @@ impl DialecticalAgent {
         model_name: Option<String>,
         reranker: Option<Arc<dyn Reranker>>,
     ) -> Self {
+        let base_url = base_url
+            .unwrap_or_else(|| crate::vector::embedder::COHERE_COMPAT_BASE_URL.to_string())
+            .trim_end_matches('/')
+            .to_string();
+        let model_name =
+            model_name.unwrap_or_else(|| crate::vector::embedder::COHERE_CHAT_MODEL.to_string());
+        let llm: Arc<dyn LlmClient> = Arc::new(FallbackLlmClient::from_api_key(
+            base_url, api_key, model_name,
+        ));
         Self {
             store,
             fulltext_index,
             hybrid_coordinator: HybridSearchCoordinator::default(),
             verifier: CitationVerifier::default(),
-            client: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(60))
-                .build()
-                .unwrap_or_default(),
-            base_url: base_url
-                .unwrap_or_else(|| crate::vector::embedder::COHERE_COMPAT_BASE_URL.to_string())
-                .trim_end_matches('/')
-                .to_string(),
-            api_key,
-            model_name: model_name
-                .unwrap_or_else(|| crate::vector::embedder::COHERE_CHAT_MODEL.to_string()),
+            llm,
             reranker,
         }
     }
@@ -167,12 +135,11 @@ impl DialecticalAgent {
             .collect();
         let user_prompt = build_rag_user_prompt(question, &context_texts);
 
-        // 3. Generate answer via LLM (or deterministic dialectical template if no API key)
-        let raw_answer = if self.api_key.is_some() {
-            self.call_llm_api(&user_prompt).await?
-        } else {
-            self.generate_offline_dialectical_answer(question, &retrieved_chunks)
-        };
+        // 3. Generate answer via LLM (online with offline fallback on API error / missing key)
+        let raw_answer = self
+            .llm
+            .generate(question, &user_prompt, &retrieved_chunks)
+            .await?;
 
         // 4. Extract quotes and verify them against retrieved chunks
         let citation_reports = self.verify_extracted_citations(&raw_answer, &retrieved_chunks);
@@ -188,81 +155,6 @@ impl DialecticalAgent {
             rerank_applied,
             rerank_scores,
         })
-    }
-
-    async fn call_llm_api(&self, user_prompt: &str) -> Result<String> {
-        let url = join_openai_path(&self.base_url, "chat/completions");
-        let req_body = ChatCompletionRequest {
-            model: &self.model_name,
-            messages: vec![
-                ChatMessage {
-                    role: "system",
-                    content: DIALECTICAL_SYSTEM_PROMPT,
-                },
-                ChatMessage {
-                    role: "user",
-                    content: user_prompt,
-                },
-            ],
-            temperature: 0.3,
-        };
-
-        let mut req = self.client.post(&url).json(&req_body);
-        if let Some(ref key) = self.api_key {
-            req = req.bearer_auth(key);
-        }
-
-        let resp = req.send().await.map_err(VectorError::HttpError)?;
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(VectorError::Other(format!(
-                "LLM API returned HTTP {status}: {body}"
-            )));
-        }
-
-        let parsed: ChatCompletionResponse = resp.json().await.map_err(VectorError::HttpError)?;
-        let answer = parsed
-            .choices
-            .into_iter()
-            .next()
-            .map(|c| c.message.content)
-            .ok_or_else(|| {
-                VectorError::Other("LLM API returned an empty choices list".to_string())
-            })?;
-
-        Ok(answer)
-    }
-
-    fn generate_offline_dialectical_answer(
-        &self,
-        question: &str,
-        chunks: &[DocumentChunk],
-    ) -> String {
-        let first_chunk = &chunks[0];
-        let title = &first_chunk.doc_title;
-        let date = &first_chunk.date;
-        let period = first_chunk.period.as_str();
-        let quote_excerpt = extract_key_quote(&first_chunk.raw_text);
-
-        format!(
-            r#"### 一、 调查研究 (Fact-Finding & Evidence)
-依据文献《{}》（{} · {}）的记载与论述：
-“{}”
-
-### 二、 主要矛盾分析 (Principal Contradiction)
-针对【{}】的问题剖析，其核心主要矛盾表现为：客观环境的规律要求 与 主观认识及执行策略之间的矛盾。
-在当前阶段，矛盾的主要方面在于必须坚持实事求是、具体问题具体分析，反对教条主义与本本主义。
-
-### 三、 理论综合 (Dialectical Synthesis)
-唯物辩证法指出，事物的内部矛盾是事物发展的根本动力。在《{}》中明确强调了必须从客观实际出发，抓住主要矛盾，一切问题才能迎刃而解。
-
-### 四、 指导实践与方针策略 (Action Policy & Conclusions)
-1. 深入实际调查，坚决贯彻群众路线；
-2. 集中主要力量解决主要矛盾；
-3. 遵循客观规律，根据时空条件的变化灵活制定战略方针。"#,
-            title, date, period, quote_excerpt, question, title
-        )
     }
 
     fn verify_extracted_citations(
@@ -307,43 +199,13 @@ pub(crate) fn answer_is_fully_grounded(
     has_evidence && !citation_reports.is_empty() && citation_reports.iter().all(|r| r.is_verified)
 }
 
-fn extract_key_quote(raw_text: &str) -> &str {
-    let trimmed = raw_text.trim();
-    // Prefer the first complete sentence ending in '。', '！', '？'
-    for (idx, ch) in trimmed.char_indices() {
-        if ch == '。' || ch == '！' || ch == '？' {
-            let sentence = &trimmed[..idx + ch.len_utf8()];
-            let char_count = sentence.chars().count();
-            if (6..=180).contains(&char_count) {
-                return sentence.trim();
-            }
-        }
-    }
-    // Fallback: take up to first 120 chars bounded by a clause punctuation
-    let char_indices: Vec<(usize, char)> = trimmed.char_indices().collect();
-    if char_indices.len() <= 120 {
-        trimmed
-    } else {
-        for &(idx, ch) in char_indices[60..120].iter().rev() {
-            if ch == '，' || ch == '；' || ch == '、' {
-                return trimmed[..idx + ch.len_utf8()].trim();
-            }
-        }
-        let end_byte = char_indices[120].0;
-        trimmed[..end_byte].trim()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::model::{DocumentMetadata, HistoricalPeriod};
 
-    #[tokio::test]
-    async fn test_dialectical_agent_offline_reasoning() {
-        let store = Arc::new(VectorStore::new_deterministic(128));
-
-        let doc = crate::model::Document {
+    fn sample_doc() -> crate::model::Document {
+        crate::model::Document {
             id: "doc_1".to_string(),
             metadata: DocumentMetadata {
                 title: "论持久战".to_string(),
@@ -360,9 +222,13 @@ mod tests {
             content: "中日战争是持久战，最后的胜利是中国的。战争将经历战略防御、战略相持、战略反攻三个阶段。".to_string(),
             footnotes: vec![],
             file_path: None,
-        };
+        }
+    }
 
-        store.index_document(&doc).await.unwrap();
+    #[tokio::test]
+    async fn test_dialectical_agent_offline_reasoning() {
+        let store = Arc::new(VectorStore::new_deterministic(128));
+        store.index_document(&sample_doc()).await.unwrap();
 
         let agent = DialecticalAgent::new(store, None, None, None, None, None);
         let answer = agent
@@ -402,27 +268,7 @@ mod tests {
     #[tokio::test]
     async fn test_offline_dialectical_four_stage_structure() {
         let store = Arc::new(VectorStore::new_deterministic(128));
-
-        let doc = crate::model::Document {
-            id: "doc_structure".to_string(),
-            metadata: DocumentMetadata {
-                title: "论持久战".to_string(),
-                author: "毛泽东".to_string(),
-                date: "1938-05-26".to_string(),
-                period: "抗日战争时期".to_string(),
-                volume: "毛泽东选集第二卷".to_string(),
-                category: "军事".to_string(),
-                tags: vec!["持久战".to_string()],
-                ..Default::default()
-            },
-            period_enum: HistoricalPeriod::WarOfResistance,
-            headnote: None,
-            content: "中日战争是持久战，最后的胜利是中国的。战争将经历战略防御、战略相持、战略反攻三个阶段。".to_string(),
-            footnotes: vec![],
-            file_path: None,
-        };
-
-        store.index_document(&doc).await.unwrap();
+        store.index_document(&sample_doc()).await.unwrap();
 
         let agent = DialecticalAgent::new(store, None, None, None, None, None);
         let answer = agent
@@ -444,5 +290,42 @@ mod tests {
         );
         assert!(answer.citation_reports.iter().all(|r| r.is_verified));
         assert!(answer.is_fully_grounded);
+    }
+
+    #[tokio::test]
+    async fn test_llm_api_error_falls_back_offline() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("upstream boom"))
+            .mount(&server)
+            .await;
+
+        let store = Arc::new(VectorStore::new_deterministic(128));
+        store.index_document(&sample_doc()).await.unwrap();
+
+        let agent = DialecticalAgent::new(
+            store,
+            None,
+            Some(server.uri()),
+            Some("test-key-present".to_string()),
+            Some("test-model".to_string()),
+            None,
+        );
+        let answer = agent
+            .ask("抗日战争为什么是持久战？", 3, None)
+            .await
+            .unwrap();
+
+        assert!(
+            answer.content.contains("调查研究"),
+            "API error with key set must fall back to offline dialectical template, got:\n{}",
+            answer.content
+        );
+        assert!(answer.content.contains("主要矛盾"));
+        assert!(!answer.retrieved_chunks.is_empty());
     }
 }

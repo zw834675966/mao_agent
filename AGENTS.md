@@ -5,8 +5,8 @@
 Single-crate Rust project (bin + lib, no workspace): vector database + retrieval agent engine for a Chinese historical corpus (Mao's writings). Rust **2024 edition**.
 
 - Entry: `src/main.rs` (CLI), `src/lib.rs` (public API)
-- Modules: `corpus` (markdown parse / CJK clean / semantic chunk), `vector` (embedders, store, HNSW ANN index), `index` (Tantivy BM25 + hybrid RRF fusion), `rerank` (Cohere Reranker + fallback), `eval` (Recall/MRR/NDCG@k), `agent` (LLM dialectical reasoning + citation verifier), `server` (Axum REST + SSE), `cli` (clap definitions), `model` (shared types)
-- Docs & CI: `README.md`, CI workflow in `.github/workflows/ci.yml`; ~77 tests under `--no-default-features`
+- Modules: `corpus` (markdown parse / CJK clean / semantic chunk), `vector` (embedders, store, HNSW ANN index), `index` (Tantivy BM25 + hybrid RRF fusion), `rerank` (Cohere Reranker + fallback), `eval` (Recall/MRR/NDCG@k), `agent` (LLM dialectical reasoning + LlmClient fallback + citation verifier), `server` (Axum REST + SSE), `cli` (clap definitions), `model` (shared types)
+- Docs & CI: `README.md`, CI workflow in `.github/workflows/ci.yml`; 80 tests under `--no-default-features`
 - Customizations: Project-specific Antigravity customizations (Skills, Rules, Hooks) reside in `.agents/`
 
 ## Commands
@@ -53,6 +53,6 @@ Use `--no-default-features` for routine test runs. Tests use `DeterministicEmbed
 
 ## Testing notes
 
-- Integration tests in `tests/` (7 files: api, chunker, config, e2e_ingest, hnsw_regression, hybrid_and_agent, vector_store) use `tempfile::tempdir()`; no fixtures, no external services, no network. Full suite ≈77 tests with `--no-default-features`.
+- Integration tests in `tests/` (7 files: api, chunker, config, e2e_ingest, hnsw_regression, hybrid_and_agent, vector_store) use `tempfile::tempdir()`; no fixtures, no external services, no network. Full suite 80 tests with `--no-default-features`.
 - Vector dim in tests varies (64/128/256) — construct stores via `VectorStore::new_deterministic(dim)` rather than copying CLI's 512 constant.
 - Rerank unit tests use mocks only (no Cohere network). Citation adversarial suite expects 100% reject on synonym/reorder/fabricated/cross-doc/noise.

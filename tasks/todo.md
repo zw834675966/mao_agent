@@ -55,3 +55,40 @@
 - [x] `tests/retrieval_hard_eval_test.rs` (easy saturates; hard resists substring matching)
 - [x] Update `evals/retrieval/BASELINE.md` + README; keep Cycles 1–6 checked
 - [ ] Optional follow-up: live Cohere rerank numbers on hard set (needs API key)
+
+## Cycle 8 — B-grade P0 (runtime + docs)
+
+Target: **B small-team intranet** — deliver what it takes to become B. Docs first + P0 code. Do not merge until review.
+
+### Done in this cycle
+- [x] `CONTEXT.md` — system boundaries, B target, data-flow sketch, non-goals
+- [x] ADRs: `docs/adr/0001-llm-fallback.md`, `0002-health-check-semantics.md`, `0003-bind-and-cors.md`
+- [x] `/health` → **503** when vector index empty (`index_loaded == false`)
+- [x] Graceful shutdown (`GracefulShutdown::wait` + `with_graceful_shutdown`)
+- [x] `LlmClient` + Online/Offline/`FallbackLlmClient` — API error with key → offline template
+- [x] Date filter: `chunk.date == "未知"` / empty must **not** pass interval filters
+- [x] Tests: health 503, LLM fallback on 500, unknown-date filter
+- [x] Gates: `fmt` / `clippy -D warnings` / `test --no-default-features`
+
+### Gap list (keep tracking)
+
+**P0 (this PR)**
+- [x] Health fail-closed
+- [x] Graceful shutdown
+- [x] LLM online→offline fallback
+- [x] Unknown-date filter fail-closed
+- [x] CONTEXT + first ADRs
+
+**P1**
+- [ ] Structured readiness vs liveness split (optional `/ready` vs `/live`) if orchestrators need both
+- [ ] Persist/emit metric or counter for LLM fallback events
+- [ ] Document operator runbook: ingest → health green → serve
+
+**P2**
+- [ ] CORS allowlist / credentials mode for named intranet origins
+- [ ] Request auth (shared secret / mTLS) before any non-loopback bind
+- [ ] SSE backpressure / max concurrent ask limits
+
+**P3**
+- [ ] Public-internet posture (TLS, rate limit, audit logs) — out of B scope
+- [ ] Multi-node index sync / warm standby
