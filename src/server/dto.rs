@@ -135,7 +135,7 @@ pub struct VerifyRequest {
     pub quote: String,
     /// 声称出处篇名，如 "论持久战"
     pub claimed_title: String,
-    /// 用于比对的上下文块；若为空则从全文索引中按 title 检索兜底
+    /// 用于比对的上下文块；不得为空（空则 400）。可先用 `/api/v1/search` 取回 chunk 再传入。
     #[serde(default)]
     pub context_chunks: Vec<DocumentChunk>,
     /// 最低置信度阈值，默认 0.85

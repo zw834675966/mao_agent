@@ -51,4 +51,4 @@ Use `--no-default-features` for routine test runs. Tests use `DeterministicEmbed
 ## Testing notes
 
 - Integration tests in `tests/` use `tempfile::tempdir()` for persistence tests; no fixtures, no external services, no network.
-- Vector dim in tests varies (64/128/256) — construct stores via `VectorStore::new_deterministic(dim)` rather than copying CLI's 384 constant.
+- Vector dim in tests varies (64/128/256) — construct stores via `VectorStore::new_deterministic(dim)` rather than copying CLI's 512 constant.
