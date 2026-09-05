@@ -877,8 +877,7 @@ async fn retrieve_chunk_ids_for_eval(
     reranker: Option<&dyn mao_agent::Reranker>,
 ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let k = args.k;
-    // force_brute is accepted as a stub for P2 HNSW comparison; no behavioral change yet.
-    let _ = args.force_brute;
+    let force_brute = args.force_brute;
     let bm25_q = bm25_query_text(query);
 
     match args.mode.as_str() {
@@ -890,12 +889,16 @@ async fn retrieve_chunk_ids_for_eval(
             Ok(results.into_iter().map(|r| r.chunk_id).collect())
         }
         "vector" => {
-            let results = store.search(query, k, filter).await?;
+            let results = store
+                .search_with_force_brute(query, k, filter, force_brute)
+                .await?;
             Ok(results.into_iter().map(|r| r.chunk_id).collect())
         }
         _ => {
             // hybrid: fuse top_k*2 then optional rerank → top_k
-            let vec_results = store.search(query, k * 2, filter).await?;
+            let vec_results = store
+                .search_with_force_brute(query, k * 2, filter, force_brute)
+                .await?;
             let bm25_results = if let Some(ft) = ft_index {
                 match ft.search(&bm25_q, k * 2, filter) {
                     Ok(r) => r,
@@ -925,9 +928,7 @@ async fn handle_eval_retrieval(args: &EvalRetrievalArgs) -> Result<(), Box<dyn s
     };
 
     if args.force_brute {
-        tracing::warn!(
-            "--force-brute is a P2 stub; brute-force is already the only path under current index size"
-        );
+        tracing::info!("--force-brute: forcing exact brute-force vector scan (HNSW ANN disabled)");
     }
 
     // Offline baseline: prefer --offline; if not set, still try load (identity mismatch handled)

@@ -3,12 +3,113 @@ use crate::model::{
     HistoricalPeriod, VectorEntry, VectorFilter, VectorSearchResult, VectorStoreStats,
 };
 use crate::vector::math::{dot_product, normalize_in_place};
+use hnswlib_rs::{Cosine, Hnsw, HnswConfig, InMemoryVectorStore};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use tracing::debug;
+use std::fmt;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use tracing::{debug, warn};
+
+/// Switch to ANN when the index reaches this many vectors (production default).
+pub const HNSW_THRESHOLD: usize = 5000;
+const HNSW_M: usize = 16;
+const HNSW_EF_CONSTRUCTION: usize = 200;
+const HNSW_EF_SEARCH: usize = 200;
+
+/// Test-only override; `0` means use [`HNSW_THRESHOLD`].
+static HNSW_THRESHOLD_OVERRIDE: AtomicUsize = AtomicUsize::new(0);
+
+/// Lower/raise the ANN activation threshold for regression tests.
+#[doc(hidden)]
+pub fn set_hnsw_threshold_for_test(threshold: usize) {
+    HNSW_THRESHOLD_OVERRIDE.store(threshold, Ordering::SeqCst);
+}
+
+/// Restore the production [`HNSW_THRESHOLD`] after tests.
+#[doc(hidden)]
+pub fn reset_hnsw_threshold_for_test() {
+    HNSW_THRESHOLD_OVERRIDE.store(0, Ordering::SeqCst);
+}
+
+fn effective_hnsw_threshold() -> usize {
+    let override_thr = HNSW_THRESHOLD_OVERRIDE.load(Ordering::SeqCst);
+    if override_thr == 0 {
+        HNSW_THRESHOLD
+    } else {
+        override_thr
+    }
+}
+
+/// In-memory HNSW graph + dense vector store (not persisted; rebuilt on load).
+struct HnswAnn {
+    graph: Hnsw<String, Cosine>,
+    vectors: InMemoryVectorStore<f32>,
+}
+
+impl HnswAnn {
+    fn build(entries: &[VectorEntry], dimension: usize) -> Option<Self> {
+        if entries.is_empty() {
+            return None;
+        }
+        let n = entries.len();
+        // Headroom for incremental inserts before a full rebuild is required.
+        let max_nodes = n
+            .saturating_mul(2)
+            .max(n + 1024)
+            .max(effective_hnsw_threshold());
+        let cfg = HnswConfig::new(dimension, max_nodes)
+            .m(HNSW_M)
+            .ef_construction(HNSW_EF_CONSTRUCTION)
+            .ef_search(HNSW_EF_SEARCH)
+            .seed(42);
+        let graph = Hnsw::new(Cosine::new(), cfg);
+        let vectors = InMemoryVectorStore::<f32>::new(dimension, max_nodes);
+        for entry in entries {
+            if let Err(err) = graph.insert(&vectors, entry.id.clone(), entry.vector.as_slice()) {
+                warn!(
+                    chunk_id = %entry.id,
+                    error = %err,
+                    "HNSW insert failed during rebuild; continuing"
+                );
+            }
+        }
+        debug!(nodes = graph.len(), "HNSW graph rebuilt");
+        Some(Self { graph, vectors })
+    }
+
+    fn insert_one(&self, id: &str, vector: &[f32]) -> bool {
+        match self.graph.insert(&self.vectors, id.to_string(), vector) {
+            Ok(()) => true,
+            Err(err) => {
+                warn!(chunk_id = %id, error = %err, "HNSW incremental insert failed");
+                false
+            }
+        }
+    }
+
+    fn set_one(&self, id: &str, vector: &[f32]) -> bool {
+        match self.graph.set(&self.vectors, id.to_string(), vector) {
+            Ok(_) => true,
+            Err(err) => {
+                warn!(chunk_id = %id, error = %err, "HNSW set failed");
+                false
+            }
+        }
+    }
+
+    fn search_keys(&self, query: &[f32], k: usize) -> Result<Vec<String>> {
+        let ef = k.max(HNSW_EF_SEARCH);
+        self.graph.set_ef_search(ef);
+        let hits = self
+            .graph
+            .search(&self.vectors, query, k, None)
+            .map_err(|e| VectorError::Other(format!("HNSW search failed: {e}")))?;
+        Ok(hits.into_iter().map(|h| h.key).collect())
+    }
+}
 
 /// High-performance in-memory Vector Index with fast inverted indices for metadata filtering.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct VectorIndex {
     /// Dimension of the vectors in this index
     dimension: usize,
@@ -24,8 +125,37 @@ pub struct VectorIndex {
     doc_index: HashMap<String, Vec<usize>>,
     /// Inverted index for tags
     tag_index: HashMap<String, Vec<usize>>,
+    /// Memory-only HNSW ANN state (skipped in snapshots; rebuilt on load).
+    #[serde(skip)]
+    hnsw: Option<HnswAnn>,
 }
 
+impl fmt::Debug for VectorIndex {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("VectorIndex")
+            .field("dimension", &self.dimension)
+            .field("entries", &self.entries.len())
+            .field("hnsw", &self.hnsw.is_some())
+            .finish()
+    }
+}
+
+impl Clone for VectorIndex {
+    fn clone(&self) -> Self {
+        let mut cloned = Self {
+            dimension: self.dimension,
+            entries: self.entries.clone(),
+            id_to_idx: self.id_to_idx.clone(),
+            period_index: self.period_index.clone(),
+            volume_index: self.volume_index.clone(),
+            doc_index: self.doc_index.clone(),
+            tag_index: self.tag_index.clone(),
+            hnsw: None,
+        };
+        cloned.rebuild_hnsw();
+        cloned
+    }
+}
 /// Extract canonical volume lookup keys (e.g. "第二卷", "选集第二卷", "毛泽东选集第二卷")
 /// for O(1) inverted index resolution.
 pub(crate) fn extract_volume_lookup_keys(volume: &str) -> Vec<String> {
@@ -72,6 +202,7 @@ impl VectorIndex {
             volume_index: HashMap::new(),
             doc_index: HashMap::new(),
             tag_index: HashMap::new(),
+            hnsw: None,
         }
     }
 
@@ -88,6 +219,44 @@ impl VectorIndex {
     /// Expected vector dimension.
     pub fn dimension(&self) -> usize {
         self.dimension
+    }
+
+    /// Whether an HNSW ANN graph is currently active.
+    pub fn has_hnsw(&self) -> bool {
+        self.hnsw.is_some()
+    }
+
+    /// Rebuild the in-memory HNSW graph when `len >= threshold`; otherwise clear it.
+    pub fn rebuild_hnsw(&mut self) {
+        if self.entries.len() < effective_hnsw_threshold() {
+            self.hnsw = None;
+            return;
+        }
+        self.hnsw = HnswAnn::build(&self.entries, self.dimension);
+    }
+
+    fn maintain_hnsw_after_inserts(&mut self, new_ids: &[String], had_update: bool) {
+        let thr = effective_hnsw_threshold();
+        if self.entries.len() < thr {
+            self.hnsw = None;
+            return;
+        }
+        if self.hnsw.is_none() || had_update {
+            self.rebuild_hnsw();
+            return;
+        }
+        let Some(ann) = self.hnsw.as_ref() else {
+            return;
+        };
+        for id in new_ids {
+            let Some(entry) = self.get(id) else {
+                continue;
+            };
+            if !ann.insert_one(id, &entry.vector) {
+                self.rebuild_hnsw();
+                return;
+            }
+        }
     }
 
     /// Insert a single VectorEntry into the index.
@@ -107,6 +276,22 @@ impl VectorIndex {
             // Update existing entry
             self.entries[existing_idx] = entry;
             self.rebuild_inverted_indices();
+            if self.entries.len() >= effective_hnsw_threshold() {
+                // Prefer in-place set; fall back to full rebuild on failure.
+                let ok = self
+                    .hnsw
+                    .as_ref()
+                    .map(|ann| {
+                        let v = &self.entries[existing_idx].vector;
+                        ann.set_one(&id, v)
+                    })
+                    .unwrap_or(false);
+                if !ok {
+                    self.rebuild_hnsw();
+                }
+            } else {
+                self.hnsw = None;
+            }
         } else {
             let idx = self.entries.len();
             // Update inverted indices
@@ -128,8 +313,9 @@ impl VectorIndex {
                     .push(idx);
             }
 
-            self.id_to_idx.insert(id, idx);
+            self.id_to_idx.insert(id.clone(), idx);
             self.entries.push(entry);
+            self.maintain_hnsw_after_inserts(&[id], false);
         }
 
         Ok(())
@@ -138,6 +324,7 @@ impl VectorIndex {
     /// Batch insert multiple VectorEntries.
     pub fn insert_batch(&mut self, entries: Vec<VectorEntry>) -> Result<()> {
         let mut had_update = false;
+        let mut new_ids = Vec::new();
         for mut entry in entries {
             if entry.vector.len() != self.dimension {
                 return Err(VectorError::DimensionMismatch {
@@ -170,23 +357,39 @@ impl VectorIndex {
                         .or_default()
                         .push(idx);
                 }
-                self.id_to_idx.insert(id, idx);
+                self.id_to_idx.insert(id.clone(), idx);
                 self.entries.push(entry);
+                new_ids.push(id);
             }
         }
 
         if had_update {
             self.rebuild_inverted_indices();
         }
+        self.maintain_hnsw_after_inserts(&new_ids, had_update);
         Ok(())
     }
-
     /// Search the index using a normalized query vector, returning top-k matching results.
+    ///
+    /// When an HNSW graph is active and `force_brute` is false, candidates are retrieved via
+    /// ANN then re-scored with exact dot-product; if post-filter yields fewer than `top_k`
+    /// hits, the implementation falls back to a full brute-force scan.
     pub fn search(
         &self,
         query_vector: &[f32],
         top_k: usize,
         filter: Option<&VectorFilter>,
+    ) -> Result<Vec<VectorSearchResult>> {
+        self.search_with_force_brute(query_vector, top_k, filter, false)
+    }
+
+    /// Like [`search`](Self::search) but forces the exact brute-force path when `force_brute`.
+    pub fn search_with_force_brute(
+        &self,
+        query_vector: &[f32],
+        top_k: usize,
+        filter: Option<&VectorFilter>,
+        force_brute: bool,
     ) -> Result<Vec<VectorSearchResult>> {
         if query_vector.len() != self.dimension {
             return Err(VectorError::DimensionMismatch {
@@ -201,6 +404,100 @@ impl VectorIndex {
         let mut norm_query = query_vector.to_vec();
         normalize_in_place(&mut norm_query);
 
+        let use_ann = !force_brute && self.hnsw.is_some();
+        if use_ann {
+            match self.search_ann(&norm_query, top_k, filter) {
+                Ok(results) if results.len() >= top_k.min(self.count_matching(filter)) => {
+                    return Ok(results);
+                }
+                Ok(partial) if !partial.is_empty() => {
+                    // Fall back to brute to fill / correct under-filtered ANN results.
+                    debug!(
+                        ann_hits = partial.len(),
+                        top_k, "ANN post-filter under-filled; falling back to brute-force"
+                    );
+                    return self.search_brute(&norm_query, top_k, filter);
+                }
+                Ok(_) => {
+                    return self.search_brute(&norm_query, top_k, filter);
+                }
+                Err(err) => {
+                    warn!(error = %err, "ANN search failed; falling back to brute-force");
+                    return self.search_brute(&norm_query, top_k, filter);
+                }
+            }
+        }
+
+        self.search_brute(&norm_query, top_k, filter)
+    }
+
+    fn count_matching(&self, filter: Option<&VectorFilter>) -> usize {
+        match filter {
+            None => self.entries.len(),
+            Some(f) => self.entries.iter().filter(|e| f.matches(&e.chunk)).count(),
+        }
+    }
+
+    fn search_ann(
+        &self,
+        norm_query: &[f32],
+        top_k: usize,
+        filter: Option<&VectorFilter>,
+    ) -> Result<Vec<VectorSearchResult>> {
+        let ann = self
+            .hnsw
+            .as_ref()
+            .ok_or_else(|| VectorError::Other("HNSW graph missing".into()))?;
+        let candidate_k = top_k.saturating_mul(20).max(HNSW_EF_SEARCH * 2);
+        let keys = ann.search_keys(norm_query, candidate_k)?;
+
+        let mut scored: Vec<(usize, f32)> = Vec::with_capacity(keys.len());
+        for key in keys {
+            let Some(&idx) = self.id_to_idx.get(&key) else {
+                continue;
+            };
+            let Some(entry) = self.entries.get(idx) else {
+                continue;
+            };
+            if let Some(f) = filter
+                && !f.matches(&entry.chunk)
+            {
+                continue;
+            }
+            let score = dot_product(norm_query, &entry.vector);
+            scored.push((idx, score));
+        }
+
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(top_k);
+
+        let results: Vec<VectorSearchResult> = scored
+            .into_iter()
+            .enumerate()
+            .map(|(rank, (idx, score))| {
+                let entry = &self.entries[idx];
+                VectorSearchResult {
+                    chunk_id: entry.id.clone(),
+                    score,
+                    rank: rank + 1,
+                    chunk: entry.chunk.clone(),
+                }
+            })
+            .collect();
+
+        debug!(
+            "Vector ANN search completed, retrieved {} results",
+            results.len()
+        );
+        Ok(results)
+    }
+
+    fn search_brute(
+        &self,
+        norm_query: &[f32],
+        top_k: usize,
+        filter: Option<&VectorFilter>,
+    ) -> Result<Vec<VectorSearchResult>> {
         // Determine candidate indices using inverted index if filter is provided
         let candidate_indices = self.resolve_filter_candidates(filter);
 
@@ -215,7 +512,7 @@ impl VectorIndex {
                         {
                             continue;
                         }
-                        let score = dot_product(&norm_query, &entry.vector);
+                        let score = dot_product(norm_query, &entry.vector);
                         scores.push((idx, score));
                     }
                 }
@@ -229,7 +526,7 @@ impl VectorIndex {
                     {
                         continue;
                     }
-                    let score = dot_product(&norm_query, &entry.vector);
+                    let score = dot_product(norm_query, &entry.vector);
                     scores.push((idx, score));
                 }
                 scores
@@ -255,12 +552,11 @@ impl VectorIndex {
             .collect();
 
         debug!(
-            "Vector search completed, retrieved {} results",
+            "Vector brute search completed, retrieved {} results",
             results.len()
         );
         Ok(results)
     }
-
     /// Resolve initial candidate indices from inverted index.
     fn resolve_filter_candidates(&self, filter: Option<&VectorFilter>) -> Option<Vec<usize>> {
         let f = filter?;
@@ -364,6 +660,7 @@ impl VectorIndex {
         if let Some(idx) = self.id_to_idx.remove(id) {
             self.entries.remove(idx);
             self.rebuild_inverted_indices();
+            self.rebuild_hnsw();
             true
         } else {
             false
@@ -378,6 +675,7 @@ impl VectorIndex {
         self.volume_index.clear();
         self.doc_index.clear();
         self.tag_index.clear();
+        self.hnsw = None;
     }
 
     /// Calculate comprehensive statistics for the vector index.
@@ -505,6 +803,7 @@ mod tests {
         index.insert(entry1).unwrap();
         index.insert(entry2).unwrap();
         assert_eq!(index.len(), 2);
+        assert!(!index.has_hnsw());
 
         // Search with query vector closest to entry1
         let query = vec![0.9, 0.1, 0.0];
@@ -518,5 +817,58 @@ mod tests {
         let filtered_results = index.search(&query, 5, Some(&filter)).unwrap();
         assert_eq!(filtered_results.len(), 1);
         assert_eq!(filtered_results[0].chunk_id, "c2");
+    }
+
+    #[test]
+    fn test_hnsw_activates_at_threshold() {
+        reset_hnsw_threshold_for_test();
+        set_hnsw_threshold_for_test(50);
+        let mut index = VectorIndex::new(8);
+        for i in 0..49 {
+            let mut v = vec![0.0_f32; 8];
+            v[i % 8] = 1.0;
+            let entry = VectorEntry {
+                id: format!("e{i}"),
+                vector: v,
+                chunk: create_dummy_chunk(
+                    &format!("e{i}"),
+                    "t",
+                    HistoricalPeriod::WarOfResistance,
+                    "选集第二卷",
+                ),
+            };
+            index.insert(entry).unwrap();
+        }
+        assert!(!index.has_hnsw());
+        let mut v = vec![0.0_f32; 8];
+        v[0] = 1.0;
+        index
+            .insert(VectorEntry {
+                id: "e49".into(),
+                vector: v,
+                chunk: create_dummy_chunk(
+                    "e49",
+                    "t",
+                    HistoricalPeriod::WarOfResistance,
+                    "选集第二卷",
+                ),
+            })
+            .unwrap();
+        assert!(index.has_hnsw());
+        assert_eq!(index.len(), 50);
+
+        let query = vec![1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        let ann = index
+            .search_with_force_brute(&query, 5, None, false)
+            .unwrap();
+        let brute = index
+            .search_with_force_brute(&query, 5, None, true)
+            .unwrap();
+        assert_eq!(ann.len(), 5);
+        assert_eq!(brute.len(), 5);
+        // Top-1 should match for this simple axis-aligned case.
+        assert_eq!(ann[0].chunk_id, brute[0].chunk_id);
+
+        reset_hnsw_threshold_for_test();
     }
 }

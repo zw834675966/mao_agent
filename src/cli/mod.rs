@@ -242,7 +242,7 @@ pub struct EvalRetrievalArgs {
     #[arg(long)]
     pub no_rerank: bool,
 
-    /// Force brute-force vector scan (reserved for P2 HNSW comparison; stub accepted)
+    /// Force brute-force vector scan (disable HNSW ANN for recall comparison)
     #[arg(long)]
     pub force_brute: bool,
 

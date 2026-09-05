@@ -57,11 +57,13 @@ fn decode_snapshot(bytes: &[u8]) -> Result<(Option<SnapshotIdentity>, VectorInde
         let mut index: VectorIndex = bincode::deserialize(&rest[header_len..])
             .map_err(|e| VectorError::Deserialization(e.to_string()))?;
         index.rebuild_inverted_indices();
+        index.rebuild_hnsw();
         Ok((Some(identity), index))
     } else {
         let mut index: VectorIndex =
             bincode::deserialize(bytes).map_err(|e| VectorError::Deserialization(e.to_string()))?;
         index.rebuild_inverted_indices();
+        index.rebuild_hnsw();
         Ok((None, index))
     }
 }

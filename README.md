@@ -14,6 +14,7 @@
   - **Dense 向量检索**：高维稠密语义向量检索，支持本地 FastEmbed (ONNX BGE-small-zh-v1.5) 与云端 Cohere `embed-v4.0`；
   - **Sparse 全文检索**：基于 Tantivy 0.22 倒排索引与 Jieba 搜索引擎模式分词（`cut_for_search`）；
   - **RRF 排序融合**：倒数排名融合算法（Reciprocal Rank Fusion），自适应合并关键字与语义相关度。
+  - **HNSW ANN**：索引达到 5000 向量后自动启用 hnswlib-rs API（经 hnsw-stable 稳定版依赖）近似近邻；快照不持久化图、加载时重建；--force-brute 可强制精确扫描做召回对比。
   - **Cohere Rerank 精排**：hybrid 默认 `fuse(top_k*2) → rerank-v3.5 → top_k`；`--no-rerank` / `COHERE_RERANK_MODEL` 可覆盖，offline 或无 key 自动降级。
 - **历史文献结构化分块与清洗 (Corpus Pipeline)**：
   - YAML Frontmatter 元数据提取（历史时期、卷册、分类、作者、成文时间）；
@@ -32,7 +33,7 @@
 # 检查编译 (使用轻量 hash 嵌入器，无需下载模型)
 cargo check --no-default-features
 
-# 运行完整测试套件 (56 个单元与集成测试，含 API 回归 tests/api_test.rs)
+# 运行完整测试套件 (70+ 个单元与集成测试，含 API 回归 tests/api_test.rs)
 cargo test --no-default-features
 
 # 编译发布版本

@@ -53,9 +53,21 @@ impl VectorStore {
         top_k: usize,
         filter: Option<&VectorFilter>,
     ) -> Result<Vec<VectorSearchResult>> {
+        self.search_with_force_brute(query, top_k, filter, false)
+            .await
+    }
+
+    /// Embed + search, optionally forcing brute-force (for HNSW eval comparison).
+    pub async fn search_with_force_brute(
+        &self,
+        query: &str,
+        top_k: usize,
+        filter: Option<&VectorFilter>,
+        force_brute: bool,
+    ) -> Result<Vec<VectorSearchResult>> {
         let query_vector = self.embedder.embed(query).await?;
         let index_guard = self.index.read().await;
-        index_guard.search(&query_vector, top_k, filter)
+        index_guard.search_with_force_brute(&query_vector, top_k, filter, force_brute)
     }
 
     /// Search directly using an embedding vector.
@@ -67,6 +79,18 @@ impl VectorStore {
     ) -> Result<Vec<VectorSearchResult>> {
         let index_guard = self.index.read().await;
         index_guard.search(query_vector, top_k, filter)
+    }
+
+    /// Vector search with optional brute-force force flag.
+    pub async fn search_vector_with_force_brute(
+        &self,
+        query_vector: &[f32],
+        top_k: usize,
+        filter: Option<&VectorFilter>,
+        force_brute: bool,
+    ) -> Result<Vec<VectorSearchResult>> {
+        let index_guard = self.index.read().await;
+        index_guard.search_with_force_brute(query_vector, top_k, filter, force_brute)
     }
 
     /// Index a single document (splits into chunks, embeds in batch, inserts into index).
