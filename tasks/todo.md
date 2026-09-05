@@ -2,19 +2,19 @@
 
 ## Cycle 1 — P0 Cohere Rerank
 
-- [ ] TODO-01: Reranker trait + module scaffold
+- [x] TODO-01: Reranker trait + module scaffold
   - Files: `src/rerank/mod.rs`, `src/rerank/cohere.rs` (stub), `src/lib.rs`, `src/error.rs`
   - Verify: `cargo check --no-default-features`
-- [ ] TODO-02: CohereReranker POST /v2/rerank + mock reorder test `[1,0,2]`
+- [x] TODO-02: CohereReranker POST /v2/rerank + mock reorder test `[1,0,2]`
   - Files: `src/rerank/cohere.rs`
   - Verify: `cargo test --no-default-features rerank`
-- [ ] TODO-03: `rerank_score` + `rerank_or_fallback`
+- [x] TODO-03: `rerank_score` + `rerank_or_fallback`
   - Files: `src/index/hybrid.rs`, `src/rerank/mod.rs`
   - Verify: existing `test_rrf_fusion` + new fallback tests
-- [ ] TODO-04: Wire CLI search/ask + DialecticalAgent + Axum `/api/v1/search`
+- [x] TODO-04: Wire CLI search/ask + DialecticalAgent + Axum `/api/v1/search`
   - Flags: `--no-rerank`, `--rerank-model`; offline ⇒ no rerank
   - Verify: `--help` shows flags; tests green without network
-- [ ] TODO-05: README + gates
+- [x] TODO-05: README + gates
   - Verify: fmt/clippy/test
 
 ## Cycle 2–6
@@ -27,4 +27,4 @@
 
 ## Checkpoint
 
-- [ ] Cycle 1 gates green
+- [x] Cycle 1 gates green

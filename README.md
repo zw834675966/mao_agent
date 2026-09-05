@@ -14,6 +14,7 @@
   - **Dense 向量检索**：高维稠密语义向量检索，支持本地 FastEmbed (ONNX BGE-small-zh-v1.5) 与云端 Cohere `embed-v4.0`；
   - **Sparse 全文检索**：基于 Tantivy 0.22 倒排索引与 Jieba 搜索引擎模式分词（`cut_for_search`）；
   - **RRF 排序融合**：倒数排名融合算法（Reciprocal Rank Fusion），自适应合并关键字与语义相关度。
+  - **Cohere Rerank 精排**：hybrid 默认 `fuse(top_k*2) → rerank-v3.5 → top_k`；`--no-rerank` / `COHERE_RERANK_MODEL` 可覆盖，offline 或无 key 自动降级。
 - **历史文献结构化分块与清洗 (Corpus Pipeline)**：
   - YAML Frontmatter 元数据提取（历史时期、卷册、分类、作者、成文时间）；
   - 针对历史文献排版与 OCR 扫描的 CJK 标点/空格清洗；
@@ -100,12 +101,18 @@ cargo run -- ingest --corpus-dir corpus --batch-size 32
 ```
 
 ### 3. 多模式文献检索 (Search)
+Hybrid 模式默认在 RRF 融合后调用 Cohere Rerank（`rerank-v3.5`，`POST https://api.cohere.com/v2/rerank`）。有 `COHERE_API_KEY` / `EMBED_API_KEY` / `config.toml [cohere].api_key` 时自动启用；`--offline`、`--no-rerank` 或无 key 时跳过并保留融合顺序。可用 `--rerank-model` / `COHERE_RERANK_MODEL` 覆盖模型。
+
 ```bash
-# 与上一节 --offline ingest 配对
+# 与上一节 --offline ingest 配对（offline ⇒ 不 rerank）
 cargo run -- search --offline "持久战的三个阶段" --top-k 3
 
 # 与 FastEmbed ingest 配对（不要加 --offline）
 cargo run -- search "持久战的三个阶段" --top-k 3
+
+# 显式关闭精排 / 指定模型
+cargo run -- search "持久战的三个阶段" --no-rerank
+cargo run -- search "持久战的三个阶段" --rerank-model rerank-v3.5
 
 # 纯向量 / 纯 BM25
 cargo run -- search --offline "主要矛盾和矛盾的主要方面" --mode vector
@@ -122,10 +129,11 @@ cargo run -- stats --offline
 ```
 
 ### 5. 辩证认知推演与引文核验问答 (Ask)
-无 API key 时走离线辩证模板。嵌入后端仍须与 ingest 一致：
+无 API key 时走离线辩证模板。嵌入后端仍须与 ingest 一致。Hybrid 召回同样支持 Cohere Rerank（`--no-rerank` / `--rerank-model` / `COHERE_RERANK_MODEL`，语义同 search）：
 
 ```bash
 cargo run -- ask --offline "抗日战争为什么是持久战？最后的胜利为什么属于中国？"
+cargo run -- ask "抗日战争为什么是持久战？" --no-rerank
 ```
 
 ### 6. HTTP API 服务 (Serve, Axum + Tokio)
@@ -139,7 +147,7 @@ cargo run -- serve --offline --bind 127.0.0.1:3000
 |---|---|
 | `GET /health` / `GET /api/v1/health` | 存活与索引状态（chunks 数、维度、tantivy 是否加载） |
 | `GET /api/v1/stats` | 向量库统计（时期/卷册分布、内存预估） |
-| `POST /api/v1/search` | 原子检索：`{query, top_k≤20, mode: hybrid\|vector\|bm25, period/volume/category/tags/start_date/end_date/doc_id/keyword, min_score}` |
+| `POST /api/v1/search` | 原子检索：`{query, top_k≤20, mode: hybrid\|vector\|bm25, period/volume/category/tags/start_date/end_date/doc_id/keyword, min_score, no_rerank}`；hybrid 结果可含 `rerank_score` |
 | `POST /api/v1/ask` | 端到端推演（阻塞 JSON）：`{question, top_k≤10, period/volume, base_url/model/api_key}`，`api_key` 也可走 `Authorization: Bearer` 头 |
 | `POST /api/v1/ask/stream` | 端到端推演（SSE）：事件 `retrieved → delta(stage) → citation → done` |
 | `POST /api/v1/verify`（别名 `/api/v1/citation/verify`） | 引文核验：`{quote, claimed_title, context_chunks, min_confidence}`，返回真子串/模糊匹配报告 |
@@ -210,3 +218,4 @@ mao_agent/
 │   └── server/                    # Axum HTTP API：DTO/路由/检索·推演SSE·核验 handlers
 └── tests/                         # 6 个模块集成测试套件 (E2E & Store & API)
 ```
+
