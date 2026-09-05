@@ -14,7 +14,7 @@
   - Dependencies: Task 1
 
 - [x] Task 3: README
-  - Acceptance: test count matches suite (44); ingest/search same backend; no-network path has `--offline` on both
+  - Acceptance: test count matches suite (56); ingest/search same backend; no-network path has `--offline` on both
   - Verify: grep README for `34` (zero hits) and `--offline` on ingest/search examples
   - Files: `README.md`
   - Scope: XS
@@ -22,6 +22,6 @@
 
 ## Checkpoint
 
-- [x] `cargo test --no-default-features` (44 passed, tester GO)
+- [x] `cargo test --no-default-features` (56 passed, tester GO)
 - [x] `cargo fmt --check`
 - [x] `cargo clippy --no-default-features --all-targets -- -D warnings`

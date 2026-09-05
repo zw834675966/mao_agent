@@ -10,3 +10,4 @@ bad_corpus/
 **/__pycache__/
 .pai/
 nul
+logs/
