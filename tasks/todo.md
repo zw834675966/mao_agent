@@ -28,7 +28,7 @@
 
 ## Cycle 3–6
 
-- [ ] TODO-09..10: HNSW + regression
+- [x] TODO-09..10: HNSW + regression
 - [ ] Cycle 4: SSE reranked + api_test
 - [ ] Cycle 5: citation adversarial
 - [ ] Cycle 6: cleanup → 70+ tests

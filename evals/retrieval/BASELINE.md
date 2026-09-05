@@ -27,7 +27,20 @@ Commit: branch `feat/retrieval-upgrade`, message `feat(eval): add eval-retrieval
 
 - Gold queries are auto-generated from chunk text with deterministic templates; lexical overlap is high, so offline DeterministicEmbedder Recall@5 saturates for vector/hybrid.
 - BM25 leg in `eval-retrieval` uses the stem inside Chinese quotation marks when present — full template questions tokenize into too many AND terms and otherwise return empty under Tantivy QueryParser.
-- `--force-brute` is accepted as a **P2 stub** (no behavioral change until HNSW).
+- --force-brute is wired: forces exact brute-force vector scan (disables HNSW ANN) for recall comparison.
+- **HNSW ANN** activates at HNSW_THRESHOLD=5000 vectors; graph is skipped in serde snapshots and rebuilt on load.
+
+## Synthetic HNSW recall guard (Cycle 3)
+
+| Item | Value |
+|------|-------|
+| Corpus | 3000 synthetic 64-d L2-normalized unit vectors |
+| Queries | 50 deterministic unit queries |
+| Threshold override | 500 (via set_hnsw_threshold_for_test) |
+| Metric | mean Recall@5 of ANN ids vs brute-force ground truth |
+| Result | mean_recall@5 >= 0.99 (absolute delta < 0.01); see 	ests/hnsw_regression_test.rs |
+
+Crate note: crates.io hnswlib-rs 0.10 pulls corenn-kernels (nightly eature(f16)). Dependency is hnsw-stable 0.10.1 aliased as hnswlib-rs so imports remain hnswlib_rs::*.
 - Rerank-on baseline is intentionally omitted here (requires live Cohere); compare later with the same CLI without `--no-rerank` when a key is present.
 
 ### Reproduce
