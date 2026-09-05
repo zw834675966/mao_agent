@@ -14,7 +14,7 @@
   - **Dense 向量检索**：高维稠密语义向量检索，支持本地 FastEmbed (ONNX BGE-small-zh-v1.5) 与云端 Cohere `embed-v4.0`；
   - **Sparse 全文检索**：基于 Tantivy 0.22 倒排索引与 Jieba 搜索引擎模式分词（`cut_for_search`）；
   - **RRF 排序融合**：倒数排名融合算法（Reciprocal Rank Fusion），自适应合并关键字与语义相关度。
-  - **HNSW ANN**：索引达到 5000 向量后自动启用 hnswlib-rs API（经 hnsw-stable 稳定版依赖）近似近邻；快照不持久化图、加载时重建；--force-brute 可强制精确扫描做召回对比。
+  - **HNSW ANN**：索引达到 5000 向量后自动启用 hnswlib-rs API（经 hnsw-stable 稳定版依赖）近似近邻；快照不持久化图、加载时重建；召回对比请用 `eval-retrieval --force-brute`（该 flag 仅存在于 eval-retrieval，`search` 不支持）。
   - **Cohere Rerank 精排**：hybrid 默认 `fuse(top_k*2) → rerank-v3.5 → top_k`；`--no-rerank` / `COHERE_RERANK_MODEL` 可覆盖，offline 或无 key 自动降级。
 - **历史文献结构化分块与清洗 (Corpus Pipeline)**：
   - YAML Frontmatter 元数据提取（历史时期、卷册、分类、作者、成文时间）；
@@ -138,7 +138,7 @@ cargo run -- ask "抗日战争为什么是持久战？" --no-rerank
 ```
 
 ### 6. 检索质量评估 (Eval Retrieval)
-离线 gold 查询集上计算 Recall / MRR / NDCG@k（默认 `evals/retrieval/queries.jsonl`，约 100+ 条）。可选 `--force-brute` 关闭 HNSW 做召回对比；`--no-rerank` 保留融合顺序基线。
+离线 gold 查询集上计算 Recall / MRR / NDCG@k（默认 `evals/retrieval/queries.jsonl`，约 100+ 条）。可选 `--force-brute`（仅 `eval-retrieval`，不在 `search`）关闭 HNSW 做召回对比；`--no-rerank` 保留融合顺序基线。
 
 ```bash
 cargo run -- eval-retrieval --offline --no-rerank --k 5

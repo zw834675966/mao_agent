@@ -41,8 +41,8 @@ Use `--no-default-features` for routine test runs. Tests use `DeterministicEmbed
 - `data/` artifacts are gitignored build outputs; regenerate via `cargo run -- ingest` after corpus changes. Don't hand-edit.
 - Cohere key resolution: `--api-key` / `--embed-api-key` → `COHERE_API_KEY` / `EMBED_API_KEY` → `config.toml` `[cohere].api_key`. Copy `config.example.toml` → `config.toml` (gitignored). Never commit the key. `ask` default model `command-r7b-12-2024`; without a key it falls back to `generate_offline_dialectical_answer`.
 - `search --mode` accepts `hybrid` (default, RRF fusion → optional Cohere rerank-v3.5 → top_k), `vector`, `bm25`. Use `--no-rerank` / `--rerank-model` / `COHERE_RERANK_MODEL`; offline or missing key skips rerank.
-- Vector ANN: HNSW (`hnswlib-rs` / hnsw-stable) activates at ≥5000 vectors; snapshot does not persist the graph (rebuild on load); `--force-brute` forces exact scan for recall comparison.
-- `eval-retrieval`: offline Recall/MRR/NDCG@k over `evals/retrieval/queries.jsonl` (~100+); see `evals/retrieval/BASELINE.md`.
+- Vector ANN: HNSW (`hnswlib-rs` / hnsw-stable) activates at ≥5000 vectors; snapshot does not persist the graph (rebuild on load).
+- `eval-retrieval`: offline Recall/MRR/NDCG@k over `evals/retrieval/queries.jsonl` (~100+); `--force-brute` forces exact vector scan (disables HNSW) for recall comparison — **eval-retrieval only**, not on `search`; see `evals/retrieval/BASELINE.md`.
 - `serve`: Axum REST + SSE; ask stream events `retrieved → reranked → delta → citation → done`. Ops: `X-Request-Id`, `GET /live` (liveness) + `/health` (readiness), `GET /metrics` + `/api/v1/metrics` (incl. `mao_llm_fallback_total`), CORS allowlist (`--cors-origins` / `MAO_CORS_ORIGINS`), optional bearer auth (`--api-token` / `MAO_API_TOKEN`), ask concurrency (`--max-concurrent-asks` / `MAO_MAX_CONCURRENT_ASKS`, default 32), Cohere chat/rerank retries then offline fallback. Runbook: `docs/ops/runbook.md`.
 
 ## Corpus / data conventions
