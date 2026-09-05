@@ -5,6 +5,7 @@ pub mod corpus;
 pub mod error;
 pub mod index;
 pub mod model;
+pub mod rerank;
 pub mod server;
 pub mod vector;
 
@@ -23,6 +24,7 @@ pub use model::{
     Document, DocumentChunk, DocumentMetadata, HistoricalPeriod, VectorEntry, VectorFilter,
     VectorSearchResult, VectorStoreStats,
 };
+pub use rerank::{COHERE_RERANK_MODEL, COHERE_RERANK_URL, CohereReranker, Reranker};
 #[cfg(feature = "local-embed")]
 pub use vector::FastEmbedder;
 pub use vector::{

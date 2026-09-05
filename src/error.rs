@@ -46,6 +46,9 @@ pub enum VectorError {
     #[error("HTTP request error: {0}")]
     HttpError(#[from] reqwest::Error),
 
+    #[error("Rerank error: {0}")]
+    RerankError(String),
+
     #[error("Configuration error: {0}")]
     ConfigError(String),
 
