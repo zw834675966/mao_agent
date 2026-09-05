@@ -119,7 +119,7 @@ Use this tool if `stats` indicates missing indexes (`data/vector_store.bin` or `
 cargo run --no-default-features -- init-samples
 
 # Step 2: Build vector store snapshot & Tantivy inverted index
-cargo run --no-default-features -- ingest --corpus-dir corpus --batch-size 32
+cargo run --no-default-features -- ingest --offline --corpus-dir corpus --batch-size 32
 ```
 
 ---
@@ -142,7 +142,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         api_key: None,
         base_url: None,
         model: "deterministic".into(),
-        dimension: 1536,
+        dimension: 512,
     };
     let embedder = resolve_embedder(&selection, None)?;
     
@@ -197,11 +197,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 | Failure Symptom | Root Cause | Automated Self-Healing Action for Agent |
 | :--- | :--- | :--- |
-| `❌ 向量索引文件未找到: data/vector_store.bin`（search/stats/ask 的友好提示） | Indexes have not been generated yet. | Execute: `cargo run --no-default-features -- init-samples && cargo run --no-default-features -- ingest --corpus-dir corpus` |
+| `❌ 向量索引文件未找到: data/vector_store.bin`（search/stats/ask 的友好提示） | Indexes have not been generated yet. | Execute: `cargo run --no-default-features -- init-samples && cargo run --no-default-features -- ingest --offline --corpus-dir corpus` |
 | Command hangs for minutes during first build or run | Default feature compiled `fastembed` and is downloading ONNX model. | Kill task and re-run with `--no-default-features`. |
 | `Missing API Key` or `Remote API error: 401 Unauthorized` | Remote LLM key not provided in `config.toml` or env. | Append `--offline` flag to `ask` command to switch to deterministic dialectical reasoning engine. |
 | Verification Report shows `⚠️ [存疑/未匹配]` | The generated answer contained a fabricated quote not found in ground truth. | Check chunk ID in `📚 支撑文献依据` and inspect raw text in [`corpus/`](file:///D:/rust/mao_agent/corpus) directly. |
-| `TargetFile: data/vector_store.bin access denied` | Hook safety policy blocked manual alteration. | Do not manually edit files in `data/`. Regenerate via `cargo run --no-default-features -- ingest`. |
+| `TargetFile: data/vector_store.bin access denied` | Hook safety policy blocked manual alteration. | Do not manually edit files in `data/`. Regenerate via `cargo run --no-default-features -- ingest --offline`. |
 
 ---
 
