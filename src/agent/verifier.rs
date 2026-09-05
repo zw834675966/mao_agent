@@ -1,6 +1,6 @@
 use crate::model::DocumentChunk;
 use serde::{Deserialize, Serialize};
-use strsim::jaro_winkler;
+use strsim::{jaro_winkler, levenshtein};
 
 /// Verification report for a citation quote extracted from LLM output.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -15,6 +15,12 @@ pub struct VerificationReport {
 }
 
 /// Hardcore Citation Verifier preventing hallucinations by checking physical substring matches in corpus.
+///
+/// Matching policy (default):
+/// 1. Exact normalized substring → `is_verified=true`, confidence 1.0
+/// 2. Equal-length sliding-window Jaro–Winkler ≥ `min_confidence`, gated by a small
+///    Levenshtein edit budget (0 edits for short quotes <40 chars; 1 edit otherwise).
+///    This blocks synonym swaps / clause reorders that raw JW≥0.85 would falsely accept.
 pub struct CitationVerifier {
     pub min_confidence: f32,
     pub min_quote_len: usize,
@@ -44,6 +50,17 @@ impl CitationVerifier {
             .collect()
     }
 
+    /// Max Levenshtein edits allowed for a non-exact fuzzy accept.
+    fn allowed_fuzzy_edits(norm_quote_chars: usize) -> usize {
+        if norm_quote_chars < 40 {
+            // Short quotes: require exact (edit budget 0). Blocks mild synonym/reorder false accepts.
+            0
+        } else {
+            // Longer quotes: allow a single OCR-like substitution/insertion/deletion.
+            1
+        }
+    }
+
     /// Verify a single quote against a pool of retrieved chunks.
     pub fn verify_quote(
         &self,
@@ -68,6 +85,7 @@ impl CitationVerifier {
         let mut best_chunk_id = None;
         let mut best_confidence = 0.0f32;
         let mut best_snippet = None;
+        let mut best_window: Option<String> = None;
 
         for chunk in chunks {
             // Priority check: Title matches
@@ -95,27 +113,32 @@ impl CitationVerifier {
                 };
             }
 
-            // 2. Sliding window Fuzzy Match (Jaro-Winkler)
+            // 2. Sliding window Fuzzy Match (equal-length Jaro-Winkler)
             let quote_len = norm_quote.chars().count();
             let chunk_chars: Vec<char> = norm_chunk_text.chars().collect();
 
             if chunk_chars.len() >= quote_len {
-                let win_size = (quote_len + 5).min(chunk_chars.len());
-                if win_size >= quote_len {
-                    for window in chunk_chars.windows(win_size) {
-                        let window_str: String = window.iter().collect();
-                        let sim = jaro_winkler(&norm_quote, &window_str) as f32;
-                        if sim > best_confidence {
-                            best_confidence = sim;
-                            best_chunk_id = Some(chunk.chunk_id.clone());
-                            best_snippet = Some(chunk.raw_text.clone());
-                        }
+                for window in chunk_chars.windows(quote_len) {
+                    let window_str: String = window.iter().collect();
+                    let sim = jaro_winkler(&norm_quote, &window_str) as f32;
+                    if sim > best_confidence {
+                        best_confidence = sim;
+                        best_chunk_id = Some(chunk.chunk_id.clone());
+                        best_snippet = Some(chunk.raw_text.clone());
+                        best_window = Some(window_str);
                     }
                 }
             }
         }
 
-        if best_confidence >= self.min_confidence {
+        let quote_len = norm_quote.chars().count();
+        let allowed_edits = Self::allowed_fuzzy_edits(quote_len);
+        let edits = best_window
+            .as_ref()
+            .map(|w| levenshtein(&norm_quote, w))
+            .unwrap_or(usize::MAX);
+
+        if best_confidence >= self.min_confidence && edits <= allowed_edits {
             VerificationReport {
                 quote: quote.to_string(),
                 claimed_doc_title: claimed_title.to_string(),
@@ -173,14 +196,11 @@ mod tests {
     use super::*;
     use crate::model::HistoricalPeriod;
 
-    #[test]
-    fn test_citation_verification_exact_and_hallucination() {
-        let verifier = CitationVerifier::default();
-
-        let chunk = DocumentChunk {
-            chunk_id: "c1".to_string(),
-            doc_id: "doc_1".to_string(),
-            doc_title: "论持久战".to_string(),
+    fn sample_chunk(chunk_id: &str, title: &str, raw_text: &str) -> DocumentChunk {
+        DocumentChunk {
+            chunk_id: chunk_id.to_string(),
+            doc_id: format!("doc_{chunk_id}"),
+            doc_title: title.to_string(),
             author: "毛泽东".to_string(),
             period: HistoricalPeriod::WarOfResistance,
             date: "1938-05-26".to_string(),
@@ -189,12 +209,22 @@ mod tests {
             tags: vec![],
             chunk_index: 0,
             total_chunks: 1,
-            char_count: 80,
-            raw_text: "兵民是胜利之本。战争的伟力之最深厚的根源，存在于民众之中。".to_string(),
-            contextualized_text: "兵民是胜利之本。战争的伟力之最深厚的根源，存在于民众之中。"
-                .to_string(),
+            char_count: raw_text.chars().count(),
+            raw_text: raw_text.to_string(),
+            contextualized_text: raw_text.to_string(),
             section_path: vec![],
-        };
+        }
+    }
+
+    #[test]
+    fn test_citation_verification_exact_and_hallucination() {
+        let verifier = CitationVerifier::default();
+
+        let chunk = sample_chunk(
+            "c1",
+            "论持久战",
+            "兵民是胜利之本。战争的伟力之最深厚的根源，存在于民众之中。",
+        );
 
         // Real quote
         let real_rep = verifier.verify_quote(
@@ -203,12 +233,103 @@ mod tests {
             std::slice::from_ref(&chunk),
         );
         assert!(real_rep.is_verified);
-        assert!(real_rep.match_confidence >= 0.95);
+        assert_eq!(real_rep.match_confidence, 1.0);
 
         // Fake hallucinated quote
         let fake_rep =
             verifier.verify_quote("互联网技术是未来战争胜负的决定性力量", "论持久战", &[chunk]);
         assert!(!fake_rep.is_verified);
         assert!(fake_rep.warning.is_some());
+    }
+
+    #[test]
+    fn test_adversarial_citation_rejection_suite() {
+        let verifier = CitationVerifier::default();
+
+        // Prefer real corpus sample text (论持久战 + 矛盾论).
+        let corpus_persist = include_str!("../../corpus/lun_chi_jiu_zhan.md");
+        let corpus_contradiction = include_str!("../../corpus/mao_dun_lun.md");
+
+        let persist_quote = "兵民是胜利之本。战争的伟力之最深厚的根源，存在于民众之中。";
+        assert!(
+            corpus_persist.contains(persist_quote),
+            "fixture quote must exist in lun_chi_jiu_zhan.md"
+        );
+
+        let contradiction_quote = "捉住了这个主要矛盾，一切问题就迎刃而解了。";
+        assert!(
+            corpus_contradiction.contains(contradiction_quote),
+            "fixture quote must exist in mao_dun_lun.md"
+        );
+
+        let persist_chunk = sample_chunk("persist", "论持久战", persist_quote);
+        let contradiction_chunk = sample_chunk(
+            "contradiction",
+            "矛盾论",
+            "研究任何过程，如果是存在着两个以上矛盾的复杂过程的话，必须用全力找出它的主要矛盾。捉住了这个主要矛盾，一切问题就迎刃而解了。",
+        );
+        let chunks = [persist_chunk.clone(), contradiction_chunk.clone()];
+
+        // 1) Exact real quote → verified + conf == 1.0
+        let exact = verifier.verify_quote(
+            "兵民是胜利之本。战争的伟力之最深厚的根源，存在于民众之中。",
+            "论持久战",
+            &chunks,
+        );
+        assert!(exact.is_verified, "exact corpus quote must verify");
+        assert_eq!(exact.match_confidence, 1.0);
+        assert_eq!(exact.matched_chunk_id.as_deref(), Some("persist"));
+
+        // Adversarial mutations — all must reject under default CitationVerifier.
+        let adversarial: Vec<(&str, &str)> = vec![
+            // Synonym / 近义替换 (兵民→军民)
+            (
+                "synonym_swap",
+                "军民是胜利之本。战争的伟力之最深厚的根源，存在于民众之中。",
+            ),
+            // 语序颠倒 (clause reorder)
+            (
+                "reorder",
+                "存在于民众之中，战争的伟力之最深厚的根源，兵民是胜利之本。",
+            ),
+            (
+                "reorder_mild",
+                "战争的伟力之最深厚的根源，兵民是胜利之本，存在于民众之中。",
+            ),
+            // 生造词 / fabricated
+            ("fabricated", "互联网技术是未来战争胜负的决定性力量"),
+            // 跨篇拼接 (persist + contradiction)
+            (
+                "cross_doc_splice",
+                "兵民是胜利之本。捉住了这个主要矛盾，一切问题就迎刃而解了。",
+            ),
+            // 随机噪声
+            ("random_noise", "xyz随机噪声abcdef战争胜负乱码测试段落"),
+        ];
+
+        let mut reject_count = 0usize;
+        for (label, quote) in &adversarial {
+            let rep = verifier.verify_quote(quote, "论持久战", &chunks);
+            assert!(
+                !rep.is_verified,
+                "adversarial `{label}` must be rejected, got conf={}",
+                rep.match_confidence
+            );
+            reject_count += 1;
+        }
+        assert_eq!(reject_count, adversarial.len());
+        assert_eq!(
+            reject_count as f32 / adversarial.len() as f32,
+            1.0,
+            "100% adversarial reject rate required"
+        );
+
+        // Cross-doc splice must also fail when only one source chunk is present.
+        let splice_only_persist = verifier.verify_quote(
+            "兵民是胜利之本。捉住了这个主要矛盾，一切问题就迎刃而解了。",
+            "论持久战",
+            std::slice::from_ref(&persist_chunk),
+        );
+        assert!(!splice_only_persist.is_verified);
     }
 }
