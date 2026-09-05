@@ -149,7 +149,9 @@ pub async fn handle_ask_stream(
             Ok(a) => a,
             Err(e) => {
                 let err_json = serde_json::json!({"error": e.to_string()});
-                yield Ok(Event::default().event("error").json_data(err_json).unwrap());
+                if let Ok(ev) = Event::default().event("error").json_data(err_json) {
+                    yield Ok(ev);
+                }
                 return;
             }
         };

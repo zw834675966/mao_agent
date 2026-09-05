@@ -33,7 +33,7 @@
 # 检查编译 (使用轻量 hash 嵌入器，无需下载模型)
 cargo check --no-default-features
 
-# 运行完整测试套件 (70+ 个单元与集成测试，含 API 回归 tests/api_test.rs)
+# 运行完整测试套件 (~77 个单元与集成测试，含 API / HNSW / citation adversarial)
 cargo test --no-default-features
 
 # 编译发布版本
@@ -137,7 +137,17 @@ cargo run -- ask --offline "抗日战争为什么是持久战？最后的胜利�
 cargo run -- ask "抗日战争为什么是持久战？" --no-rerank
 ```
 
-### 6. HTTP API 服务 (Serve, Axum + Tokio)
+### 6. 检索质量评估 (Eval Retrieval)
+离线 gold 查询集上计算 Recall / MRR / NDCG@k（默认 `evals/retrieval/queries.jsonl`，约 100+ 条）。可选 `--force-brute` 关闭 HNSW 做召回对比；`--no-rerank` 保留融合顺序基线。
+
+```bash
+cargo run -- eval-retrieval --offline --no-rerank --k 5
+cargo run -- eval-retrieval --offline --force-brute --json
+```
+
+基线说明见 `evals/retrieval/BASELINE.md`。
+
+### 7. HTTP API 服务 (Serve, Axum + Tokio)
 将混合检索 / 辩证推演 / 引文核验封装为 REST + SSE 微服务，供上游业务系统或 Agent 调用。嵌入后端仍须与 ingest 一致：
 
 ```bash
@@ -211,12 +221,14 @@ mao_agent/
 │   ├── model.rs                   # 数据模型 (Document, Chunk, Period)
 │   ├── error.rs                   # 统一错误处理枚举 (thiserror)
 │   ├── cli/                       # Clap 强类型命令行参数定义
-│   ├── assets/samples/            # 预置经典历史文献模板
 │   ├── corpus/                    # 文档解析、CJK清洗与语义分块器
-│   ├── vector/                    # 稠密向量存储、内存索引与 Embedding 模型
+│   ├── vector/                    # 稠密向量存储、HNSW ANN、Embedding
 │   ├── index/                     # Tantivy 全文倒排索引与 RRF 融合协调器
+│   ├── rerank/                    # Cohere Rerank trait + client（mock 可测）
+│   ├── eval/                      # Recall / MRR / NDCG@k 检索指标
 │   ├── agent/                     # 辩证认知推演引擎与引文真实性核验器
 │   └── server/                    # Axum HTTP API：DTO/路由/检索·推演SSE·核验 handlers
-└── tests/                         # 6 个模块集成测试套件 (E2E & Store & API)
+├── evals/retrieval/               # gold queries.jsonl + BASELINE.md
+└── tests/                         # 7 个集成测试套件 (E2E / Store / API / HNSW)
 ```
 

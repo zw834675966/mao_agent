@@ -15,32 +15,32 @@ Execute P0 Cohere Rerank → P1 eval harness → P2 HNSW → server SSE → cita
 
 ### Cycle 1 — P0 Rerank (Batch 1)
 
-- [ ] TODO-01: `src/rerank/` + `Reranker` trait
-- [ ] TODO-02: `CohereReranker` + mock tests
-- [ ] TODO-03: `HybridSearchResult.rerank_score` + `rerank_or_fallback`
-- [ ] TODO-04: CLI/Agent/Axum wiring (`--no-rerank`)
-- [ ] TODO-05: README/docs + CI gates green
+- [x] TODO-01: `src/rerank/` + `Reranker` trait
+- [x] TODO-02: `CohereReranker` + mock tests
+- [x] TODO-03: `HybridSearchResult.rerank_score` + `rerank_or_fallback`
+- [x] TODO-04: CLI/Agent/Axum wiring (`--no-rerank`)
+- [x] TODO-05: README/docs + CI gates green
 
 ### Cycle 2 — P1 Eval
 
-- [ ] TODO-06: `src/eval` Recall/MRR/NDCG
-- [ ] TODO-07: `evals/retrieval/queries.jsonl` ~100
-- [ ] TODO-08: `eval-retrieval` CLI + BASELINE.md
+- [x] TODO-06: `src/eval` Recall/MRR/NDCG
+- [x] TODO-07: `evals/retrieval/queries.jsonl` ~100
+- [x] TODO-08: `eval-retrieval` CLI + BASELINE.md
 
 ### Cycle 3 — P2 HNSW
 
-- [ ] TODO-09: `hnswlib-rs` threshold + fallback
-- [ ] TODO-10: regression test delta_recall < 1%
+- [x] TODO-09: `hnswlib-rs` threshold + fallback
+- [x] TODO-10: regression test delta_recall < 1%
 
 ### Cycles 4–6
 
-- [ ] SSE `reranked` event + API tests
-- [ ] Citation adversarial suite
-- [ ] Simplify + README numbers → 70+ tests
+- [x] SSE `reranked` event + API tests
+- [x] Citation adversarial suite
+- [x] Simplify + README numbers → 70+ tests (~77)
 
 ## Checkpoints
 
-- [ ] After Cycle 1: `cargo fmt --check && cargo clippy --no-default-features --all-targets -- -D warnings && cargo test --no-default-features`
-- [ ] After Cycle 2: eval-retrieval smoke
-- [ ] After Cycle 3: hnsw_regression_test
-- [ ] Final: 70+ tests green
+- [x] After Cycle 1: `cargo fmt --check && cargo clippy --no-default-features --all-targets -- -D warnings && cargo test --no-default-features`
+- [x] After Cycle 2: eval-retrieval smoke
+- [x] After Cycle 3: hnsw_regression_test
+- [x] Final: 70+ tests green (~77)

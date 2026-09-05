@@ -38,10 +38,11 @@
   - `test_adversarial_citation_rejection_suite`: exact conf==1.0; synonym/reorder/fabricated/cross-doc/noise -> 100% reject
   - `test_offline_dialectical_four_stage_structure`: four stage headings in order
   - Gates: fmt / clippy -D warnings / cargo test --no-default-features
-- [ ] Cycle 6: cleanup → 70+ tests
+- [x] Cycle 6: cleanup → 70+ tests (~77); docs sync; SSE error path no unwrap; plan/todo complete
 
 ## Checkpoint
 
 - [x] Cycle 1 gates green
 - [x] Cycle 2 gates green (fmt/clippy/test; eval-retrieval smoke offline)
 - [x] Cycle 5 gates green (adversarial citation 100% reject; four-stage structure; fmt/clippy/test)
+- [x] Cycle 6 gates green (fmt/clippy/test; docs synced; ~77 tests)
