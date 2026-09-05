@@ -121,8 +121,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut doc_counts: HashMap<String, usize> = HashMap::new();
 
     // Prefer core-period chunks first for coverage
-    let mut ordered: Vec<&DocumentChunk> = all_chunks.iter().filter(|c| is_core_period(c.period)).collect();
-    let rest: Vec<&DocumentChunk> = all_chunks.iter().filter(|c| !is_core_period(c.period)).collect();
+    let mut ordered: Vec<&DocumentChunk> = all_chunks
+        .iter()
+        .filter(|c| is_core_period(c.period))
+        .collect();
+    let rest: Vec<&DocumentChunk> = all_chunks
+        .iter()
+        .filter(|c| !is_core_period(c.period))
+        .collect();
     ordered.extend(rest);
 
     let mut variant = 0usize;
@@ -151,7 +157,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             *dc += 1;
 
-            let filter = if variant % 5 == 0 {
+            let filter = if variant.is_multiple_of(5) {
                 period_label(chunk.period).map(|p| QueryFilter {
                     period: Some(p.to_string()),
                 })

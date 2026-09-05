@@ -223,6 +223,45 @@ pub struct ServeArgs {
     pub embedder: EmbedderArgs,
 }
 
+/// Offline retrieval evaluation over gold queries (Recall/MRR/NDCG@k)
+#[derive(Args, Debug, Clone)]
+pub struct EvalRetrievalArgs {
+    /// Path to gold queries NDJSON file
+    #[arg(long, default_value = "evals/retrieval/queries.jsonl")]
+    pub queries_file: PathBuf,
+
+    /// Cutoff k for Recall/MRR/NDCG@k
+    #[arg(long, default_value_t = 5)]
+    pub k: usize,
+
+    /// Retrieval mode: hybrid, vector, or bm25
+    #[arg(long, default_value = "hybrid")]
+    pub mode: String,
+
+    /// Disable Cohere rerank (baseline offline default)
+    #[arg(long)]
+    pub no_rerank: bool,
+
+    /// Force brute-force vector scan (reserved for P2 HNSW comparison; stub accepted)
+    #[arg(long)]
+    pub force_brute: bool,
+
+    /// Emit per-query NDJSON + summary object instead of a table
+    #[arg(long)]
+    pub json: bool,
+
+    #[command(flatten)]
+    pub embedder: EmbedderArgs,
+
+    /// Path to vector index snapshot file
+    #[arg(short, long, default_value = "data/vector_store.bin")]
+    pub index_file: PathBuf,
+
+    /// Path to Tantivy full-text index directory
+    #[arg(long, default_value = "data/tantivy_index")]
+    pub tantivy_dir: PathBuf,
+}
+
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     /// Ingest a corpus directory of Markdown documents into the vector database
@@ -242,4 +281,7 @@ pub enum Commands {
 
     /// Serve the Mao Agent as a high-performance HTTP API (Axum + Tokio)
     Serve(ServeArgs),
+
+    /// Evaluate retrieval quality (Recall/MRR/NDCG@k) against gold queries
+    EvalRetrieval(EvalRetrievalArgs),
 }

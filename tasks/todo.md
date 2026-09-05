@@ -17,9 +17,17 @@
 - [x] TODO-05: README + gates
   - Verify: fmt/clippy/test
 
-## Cycle 2–6
+## Cycle 2 — P1 Retrieval Eval
 
-- [ ] TODO-06..08: eval metrics + queries.jsonl + eval-retrieval
+- [x] TODO-06: eval metrics (`src/eval/mod.rs` Recall/MRR/NDCG@k)
+  - Commit: `feat(eval): add recall/mrr/ndcg@k metrics`
+- [x] TODO-07: `evals/retrieval/queries.jsonl` (~105) + README
+  - Commit: `feat(eval): add retrieval queries.jsonl (~100 auto-generated from corpus)`
+- [x] TODO-08: `eval-retrieval` CLI + `BASELINE.md`
+  - Commit: `feat(eval): add eval-retrieval CLI and BASELINE`
+
+## Cycle 3–6
+
 - [ ] TODO-09..10: HNSW + regression
 - [ ] Cycle 4: SSE reranked + api_test
 - [ ] Cycle 5: citation adversarial
@@ -28,3 +36,4 @@
 ## Checkpoint
 
 - [x] Cycle 1 gates green
+- [x] Cycle 2 gates green (fmt/clippy/test; eval-retrieval smoke offline)
