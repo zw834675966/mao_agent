@@ -3,6 +3,7 @@ pub mod cli;
 pub mod config;
 pub mod corpus;
 pub mod error;
+pub mod eval;
 pub mod index;
 pub mod model;
 pub mod rerank;
