@@ -45,3 +45,14 @@ Verified that the quoted stem appears in the source markdown and the gold `chunk
 ## Baseline
 
 See [`BASELINE.md`](./BASELINE.md) for offline Hybrid / Vector / BM25 metrics (`--no-default-features`, DeterministicEmbedder).
+## Hard subset (`queries_hard.jsonl`)
+
+Hand-authored adversarial queries (**≥20**) that avoid long quoted stems:
+
+| `kind` | Intent |
+|--------|--------|
+| `paraphrase` | Ask for the concept without copying chunk wording |
+| `cross_doc` | Prefer scholarship / secondary literature over primary Mao essays |
+| `hard_negative` | Wording that can pull sibling docs; gold is the intended chunk |
+
+Guarded by `tests/retrieval_hard_eval_test.rs`: easy auto-gold stays lexically saturated; hard gold must fail a title-stripped 8-gram containment Recall@5 gate (&lt; 0.35) plus per-query LCS&lt;8.

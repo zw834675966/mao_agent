@@ -1,5 +1,9 @@
 //! Pure retrieval metrics: Recall@k, MRR@k, NDCG@k (no I/O, no network).
 
+mod gold;
+
+pub use gold::{GoldQuery, GoldQueryFilter, GoldQuerySet};
+
 use std::collections::HashSet;
 
 /// Fraction of expected chunk IDs that appear in the top-`k` retrieved results.

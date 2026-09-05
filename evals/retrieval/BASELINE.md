@@ -50,3 +50,23 @@ cargo run --no-default-features -- eval-retrieval --k 5 --mode hybrid --no-reran
 cargo run --no-default-features -- eval-retrieval --k 5 --mode vector --no-rerank --offline --json
 cargo run --no-default-features -- eval-retrieval --k 5 --mode bm25 --no-rerank --offline --json
 ```
+
+## Hard-negative / paraphrase subset (Cycle 7)
+
+Dedicated file: `evals/retrieval/queries_hard.jsonl` (**26** queries: paraphrase / cross_doc / hard_negative).
+
+| Check | Result |
+|-------|--------|
+| Easy auto-gold `「」` stem rate (≥12 chars) | ~1.0 (weak quality signal; see above) |
+| Hard gold `「」` stem rate (≥8 chars) | **0.0** (enforced by `tests/retrieval_hard_eval_test.rs`) |
+| 8-gram containment Recall@5 on easy gold (titles stripped) | ≳ 0.90 (saturates) |
+| 8-gram containment Recall@5 on hard gold (titles stripped) | **&lt; 0.35** gate + per-query LCS&lt;8 |
+
+Offline DeterministicEmbedder Hybrid Recall@5 on the **easy** auto-gold remains ~1.0 and is **not** a meaningful ranking quality signal. Use the hard file for regression:
+
+```bash
+cargo run --no-default-features -- eval-retrieval --queries-file evals/retrieval/queries_hard.jsonl --k 5 --mode hybrid --no-rerank --offline
+cargo test --no-default-features --test retrieval_hard_eval_test
+```
+
+Live Cohere rerank comparison is still out of scope for this offline baseline (default model remains `rerank-v3.5`).
