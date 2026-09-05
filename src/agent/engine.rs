@@ -9,6 +9,7 @@ use crate::rerank::{Reranker, rerank_or_fallback};
 use crate::vector::store::VectorStore;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, LazyLock};
 use tracing::{info, warn};
 
@@ -50,15 +51,37 @@ impl DialecticalAgent {
         model_name: Option<String>,
         reranker: Option<Arc<dyn Reranker>>,
     ) -> Self {
+        Self::new_with_fallback_counter(
+            store,
+            fulltext_index,
+            base_url,
+            api_key,
+            model_name,
+            reranker,
+            None,
+        )
+    }
+
+    pub fn new_with_fallback_counter(
+        store: Arc<VectorStore>,
+        fulltext_index: Option<Arc<FullTextIndex>>,
+        base_url: Option<String>,
+        api_key: Option<String>,
+        model_name: Option<String>,
+        reranker: Option<Arc<dyn Reranker>>,
+        fallback_counter: Option<Arc<AtomicU64>>,
+    ) -> Self {
         let base_url = base_url
             .unwrap_or_else(|| crate::vector::embedder::COHERE_COMPAT_BASE_URL.to_string())
             .trim_end_matches('/')
             .to_string();
         let model_name =
             model_name.unwrap_or_else(|| crate::vector::embedder::COHERE_CHAT_MODEL.to_string());
-        let llm: Arc<dyn LlmClient> = Arc::new(FallbackLlmClient::from_api_key(
-            base_url, api_key, model_name,
-        ));
+        let mut fallback = FallbackLlmClient::from_api_key(base_url, api_key, model_name);
+        if let Some(counter) = fallback_counter {
+            fallback = fallback.with_fallback_counter(counter);
+        }
+        let llm: Arc<dyn LlmClient> = Arc::new(fallback);
         Self {
             store,
             fulltext_index,

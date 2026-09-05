@@ -70,3 +70,7 @@ cargo test --no-default-features --test retrieval_hard_eval_test
 ```
 
 Live Cohere rerank comparison is still out of scope for this offline baseline (default model remains `rerank-v3.5`).
+
+## Live Cohere hard-set (Cycle 10)
+
+**Cancelled/deferred** for the B-grade offline bar: live Cohere rerank numbers on `queries_hard.jsonl` need an API secret. Revisit when a CI secret is available.

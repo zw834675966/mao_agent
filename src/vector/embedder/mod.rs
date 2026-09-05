@@ -197,7 +197,10 @@ impl Embedder for OpenAIEmbedder {
             req = req.bearer_auth(key);
         }
 
-        let resp = req.send().await.map_err(VectorError::HttpError)?;
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| VectorError::HttpError(e.to_string()))?;
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
@@ -206,7 +209,10 @@ impl Embedder for OpenAIEmbedder {
             )));
         }
 
-        let mut parsed: EmbeddingResponse = resp.json().await.map_err(VectorError::HttpError)?;
+        let mut parsed: EmbeddingResponse = resp
+            .json()
+            .await
+            .map_err(|e| VectorError::HttpError(e.to_string()))?;
         parsed.data.sort_by_key(|d| d.index);
 
         if parsed.data.len() != texts.len() {

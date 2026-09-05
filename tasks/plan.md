@@ -44,3 +44,13 @@ Execute P0 Cohere Rerank → P1 eval harness → P2 HNSW → server SSE → cita
 - [x] After Cycle 2: eval-retrieval smoke
 - [x] After Cycle 3: hnsw_regression_test
 - [x] Final: 70+ tests green (~77)
+
+## Cycles 7–10 (B-grade + hard eval)
+
+- [x] Cycle 7: hard-negative gold + offline hardness tests
+- [x] Cycle 8: B-grade P0 (health fail-closed, shutdown, LLM fallback, CONTEXT/ADRs)
+- [x] Cycle 9: B-grade P1 ops (request-id, retries, metrics, CORS allowlist)
+- [x] Cycle 10: live/ready split, fallback metric, runbook, VectorFilter/HttpError seams, auth + ask concurrency, CI audit/release-build
+
+### Cancelled (YAGNI / out of B)
+- Credentials-mode CORS; public-internet TLS/rate-limit/audit; multi-node sync; live Cohere hard-set baseline (needs secret)

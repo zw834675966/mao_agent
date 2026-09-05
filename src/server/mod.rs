@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod cors;
 pub mod dto;
 pub mod error;
@@ -6,6 +7,7 @@ pub mod metrics;
 pub mod request_id;
 pub mod state;
 
+use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
@@ -18,17 +20,21 @@ use tower_http::trace::TraceLayer;
 use crate::index::HybridSearchCoordinator;
 use crate::rerank::Reranker;
 
+use self::auth::ApiAuth;
 use self::cors::CorsAllowlist;
 use self::request_id::RequestId;
 use self::state::AppState;
 
-/// Build the Axum router with CORS allowlist, request-id, metrics, and tracing.
+/// Build the Axum router with CORS allowlist, request-id, optional auth, metrics, and tracing.
 pub fn build_router(state: AppState) -> Router {
     build_router_with_cors(state, CorsAllowlist::localhost_defaults())
 }
 
 pub fn build_router_with_cors(state: AppState, cors: CorsAllowlist) -> Router {
+    let auth_state = state.clone();
     Router::new()
+        .route("/live", get(handlers::health::handle_live))
+        .route("/api/v1/live", get(handlers::health::handle_live))
         .route("/health", get(handlers::health::handle_health))
         .route("/api/v1/health", get(handlers::health::handle_health))
         .route("/api/v1/stats", get(handlers::health::handle_stats))
@@ -43,6 +49,10 @@ pub fn build_router_with_cors(state: AppState, cors: CorsAllowlist) -> Router {
             post(handlers::verify::handle_verify),
         )
         .with_state(state)
+        .layer(middleware::from_fn_with_state(
+            auth_state,
+            ApiAuth::middleware,
+        ))
         .layer(cors.layer())
         .layer(middleware::from_fn(RequestId::middleware))
         .layer(TraceLayer::new_for_http())
@@ -85,6 +95,23 @@ impl GracefulShutdown {
     }
 }
 
+/// Serve with a custom shutdown future (testable seam).
+pub async fn serve_with_shutdown<F>(
+    app: Router,
+    addr: SocketAddr,
+    shutdown: F,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    tracing::info!("Mao Agent API listening on http://{}", addr);
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown)
+        .await?;
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn serve(
     store: Arc<crate::vector::VectorStore>,
@@ -96,8 +123,10 @@ pub async fn serve(
     chat_model: String,
     addr: SocketAddr,
     cors: CorsAllowlist,
+    api_token: Option<String>,
+    max_concurrent_asks: usize,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let state = AppState::new(
+    let state = AppState::with_ops(
         store,
         tantivy,
         hybrid,
@@ -105,19 +134,91 @@ pub async fn serve(
         chat_base_url,
         chat_api_key,
         chat_model,
+        metrics::HttpMetrics::new(),
+        api_token,
+        max_concurrent_asks,
     );
     let app = build_router_with_cors(state, cors);
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    tracing::info!("Mao Agent API listening on http://{}", addr);
-    tracing::info!("  GET  /health");
+    tracing::info!("  GET  /live  /health");
     tracing::info!("  GET  /metrics  /api/v1/metrics");
     tracing::info!("  GET  /api/v1/health  /api/v1/stats");
     tracing::info!("  POST /api/v1/search");
     tracing::info!("  POST /api/v1/ask          (blocking JSON)");
     tracing::info!("  POST /api/v1/ask/stream   (SSE)");
     tracing::info!("  POST /api/v1/verify  (/citation/verify)");
-    axum::serve(listener, app)
-        .with_graceful_shutdown(GracefulShutdown::wait())
-        .await?;
-    Ok(())
+    serve_with_shutdown(app, addr, GracefulShutdown::wait()).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::Request;
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn graceful_shutdown_stops_serve() {
+        let store = Arc::new(crate::vector::VectorStore::new_deterministic(32));
+        let state = AppState::new(
+            store,
+            None,
+            HybridSearchCoordinator::default(),
+            None,
+            "http://127.0.0.1:9".into(),
+            None,
+            "m".into(),
+        );
+        let app = build_router(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async move {
+                    let _ = rx.await;
+                })
+                .await
+        });
+        // Smoke: process answers while up
+        let client = reqwest::Client::new();
+        let resp = client
+            .get(format!("http://{addr}/live"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), reqwest::StatusCode::OK);
+        tx.send(()).unwrap();
+        server.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn live_always_200_when_index_empty() {
+        let store = Arc::new(crate::vector::VectorStore::new_deterministic(32));
+        let state = AppState::new(
+            store,
+            None,
+            HybridSearchCoordinator::default(),
+            None,
+            "http://127.0.0.1:9".into(),
+            None,
+            "m".into(),
+        );
+        let app = build_router(state);
+        let live = app
+            .clone()
+            .oneshot(Request::builder().uri("/live").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(live.status(), axum::http::StatusCode::OK);
+        let health = app
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(health.status(), axum::http::StatusCode::SERVICE_UNAVAILABLE);
+    }
 }

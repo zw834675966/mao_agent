@@ -224,6 +224,16 @@ pub struct ServeArgs {
     #[arg(long, env = "MAO_CORS_ORIGINS")]
     pub cors_origins: Option<String>,
 
+    /// Shared API bearer token. When set, protected routes require `Authorization: Bearer …`.
+    /// Env: `MAO_API_TOKEN`. Overrides `[server].api_token` in config.toml.
+    /// Loopback without a token stays open for local dev (ADR 0005).
+    #[arg(long, env = "MAO_API_TOKEN")]
+    pub api_token: Option<String>,
+
+    /// Max concurrent `/api/v1/ask` + `/ask/stream` requests (default 32). Env: `MAO_MAX_CONCURRENT_ASKS`.
+    #[arg(long, env = "MAO_MAX_CONCURRENT_ASKS", default_value_t = 32)]
+    pub max_concurrent_asks: usize,
+
     #[command(flatten)]
     pub embedder: EmbedderArgs,
 }

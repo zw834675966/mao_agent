@@ -1,5 +1,7 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::warn;
 
 use crate::agent::prompt::DIALECTICAL_SYSTEM_PROMPT;
@@ -127,7 +129,7 @@ impl OnlineLlmClient {
             .json(&req_body)
             .send()
             .await
-            .map_err(|e| LlmAttemptError::Retryable(VectorError::HttpError(e)))?;
+            .map_err(|e| LlmAttemptError::Retryable(VectorError::HttpError(e.to_string())))?;
 
         let status = resp.status();
         if !status.is_success() {
@@ -142,7 +144,7 @@ impl OnlineLlmClient {
         let parsed: ChatCompletionResponse = resp
             .json()
             .await
-            .map_err(|e| LlmAttemptError::Fatal(VectorError::HttpError(e)))?;
+            .map_err(|e| LlmAttemptError::Fatal(VectorError::HttpError(e.to_string())))?;
         parsed
             .choices
             .into_iter()
@@ -223,16 +225,35 @@ impl LlmClient for OfflineLlmClient {
 /// Online path applies [`RetryPolicy`] first; fallback runs only after retries are exhausted.
 pub struct FallbackLlmClient {
     online: Option<OnlineLlmClient>,
+    /// Optional counter incremented when online fails and offline template is used.
+    fallback_counter: Option<Arc<AtomicU64>>,
 }
 
 impl FallbackLlmClient {
     pub fn from_api_key(base_url: String, api_key: Option<String>, model_name: String) -> Self {
         let online = api_key.map(|key| OnlineLlmClient::new(base_url, key, model_name));
-        Self { online }
+        Self {
+            online,
+            fallback_counter: None,
+        }
     }
 
     pub fn from_online(online: Option<OnlineLlmClient>) -> Self {
-        Self { online }
+        Self {
+            online,
+            fallback_counter: None,
+        }
+    }
+
+    pub fn with_fallback_counter(mut self, counter: Arc<AtomicU64>) -> Self {
+        self.fallback_counter = Some(counter);
+        self
+    }
+
+    fn record_fallback(&self) {
+        if let Some(ref c) = self.fallback_counter {
+            c.fetch_add(1, Ordering::Relaxed);
+        }
     }
 }
 
@@ -251,8 +272,11 @@ impl LlmClient for FallbackLlmClient {
                     warn!(
                         "LLM API failed after retries, falling back to offline dialectical template: {e}"
                     );
+                    self.record_fallback();
                 }
             }
+        } else {
+            // No online client configured — offline path is the primary, not a fallback event.
         }
         Ok(OfflineLlmClient::generate(question, chunks))
     }
@@ -333,7 +357,9 @@ mod tests {
             "m".into(),
             RetryPolicy::fast_test(),
         );
-        let client = FallbackLlmClient::from_online(Some(online));
+        let counter = Arc::new(AtomicU64::new(0));
+        let client = FallbackLlmClient::from_online(Some(online))
+            .with_fallback_counter(Arc::clone(&counter));
         let chunk = DocumentChunk {
             chunk_id: "c1".into(),
             doc_id: "d1".into(),
@@ -356,5 +382,10 @@ mod tests {
             .await
             .unwrap();
         assert!(text.contains("调查研究"), "got: {text}");
+        assert_eq!(
+            counter.load(Ordering::Relaxed),
+            1,
+            "fallback must increment counter"
+        );
     }
 }
