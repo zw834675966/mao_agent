@@ -103,6 +103,71 @@ fn extract_year(s: &str) -> Option<i32> {
     None
 }
 
+fn is_leap_year(year: i32) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
+}
+
+fn days_in_month(year: i32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if is_leap_year(year) {
+                29
+            } else {
+                28
+            }
+        }
+        _ => 30,
+    }
+}
+
+/// Parse a historical date into an inclusive closed interval `[start_date, end_date]` in ISO `YYYY-MM-DD`.
+/// Handles "YYYY", "YYYY-MM", and "YYYY-MM-DD".
+fn date_to_interval(date_str: &str) -> Option<(String, String)> {
+    let trimmed = date_str.trim();
+    if trimmed.is_empty() || trimmed == "未知" {
+        return None;
+    }
+
+    let parts: Vec<&str> = trimmed.split('-').collect();
+    let year: i32 = parts.first()?.parse().ok()?;
+
+    match parts.len() {
+        1 => {
+            // "YYYY" -> [YYYY-01-01, YYYY-12-31]
+            Some((format!("{year:04}-01-01"), format!("{year:04}-12-31")))
+        }
+        2 => {
+            // "YYYY-MM" -> [YYYY-MM-01, YYYY-MM-last_day]
+            let month: u32 = parts[1].parse().ok()?;
+            if !(1..=12).contains(&month) {
+                return None;
+            }
+            let last_day = days_in_month(year, month);
+            Some((
+                format!("{year:04}-{month:02}-01"),
+                format!("{year:04}-{month:02}-{last_day:02}"),
+            ))
+        }
+        3 => {
+            // "YYYY-MM-DD" -> [YYYY-MM-DD, YYYY-MM-DD]
+            let month: u32 = parts[1].parse().ok()?;
+            let day: u32 = parts[2].parse().ok()?;
+            if !(1..=12).contains(&month) {
+                return None;
+            }
+            let max_day = days_in_month(year, month);
+            let clamped_day = day.clamp(1, max_day);
+            Some((
+                format!("{year:04}-{month:02}-{clamped_day:02}"),
+                format!("{year:04}-{month:02}-{clamped_day:02}"),
+            ))
+        }
+        _ => None,
+    }
+}
+
 /// Metadata extracted from document YAML frontmatter.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct DocumentMetadata {
@@ -241,6 +306,7 @@ impl VectorFilter {
             return false;
         }
         if let Some(ref periods) = self.periods
+            && !periods.is_empty()
             && !periods.contains(&chunk.period)
         {
             return false;
@@ -259,22 +325,45 @@ impl VectorFilter {
         }
         if let Some(ref tags) = self.tags {
             for tag in tags {
-                if !chunk.tags.iter().any(|t| t.contains(tag)) {
+                if !chunk
+                    .tags
+                    .iter()
+                    .any(|t| t.contains(tag) || tag.contains(t))
+                {
                     return false;
                 }
             }
         }
-        if let Some(ref start) = self.start_date
-            && chunk.date != "未知"
-            && chunk.date.as_str() < start.as_str()
-        {
-            return false;
-        }
-        if let Some(ref end) = self.end_date
-            && chunk.date != "未知"
-            && chunk.date.as_str() > end.as_str()
-        {
-            return false;
+        if (self.start_date.is_some() || self.end_date.is_some()) && chunk.date != "未知" {
+            if let Some((chunk_start, chunk_end)) = date_to_interval(&chunk.date) {
+                if let Some(ref start) = self.start_date {
+                    let filter_start = date_to_interval(start)
+                        .map(|(s, _)| s)
+                        .unwrap_or_else(|| start.clone());
+                    if chunk_end < filter_start {
+                        return false;
+                    }
+                }
+                if let Some(ref end) = self.end_date {
+                    let filter_end = date_to_interval(end)
+                        .map(|(_, e)| e)
+                        .unwrap_or_else(|| end.clone());
+                    if chunk_start > filter_end {
+                        return false;
+                    }
+                }
+            } else {
+                if let Some(ref start) = self.start_date
+                    && chunk.date.as_str() < start.as_str()
+                {
+                    return false;
+                }
+                if let Some(ref end) = self.end_date
+                    && chunk.date.as_str() > end.as_str()
+                {
+                    return false;
+                }
+            }
         }
         if let Some(ref doc_id) = self.doc_id
             && chunk.doc_id != *doc_id
@@ -311,4 +400,106 @@ pub struct VectorStoreStats {
     pub volume_distribution: HashMap<String, usize>,
     pub total_characters_indexed: usize,
     pub estimated_memory_bytes: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_leap_year_and_days_in_month() {
+        assert!(!is_leap_year(1900));
+        assert!(is_leap_year(2000));
+        assert!(is_leap_year(1936));
+        assert!(!is_leap_year(1937));
+        assert!(!is_leap_year(1938));
+
+        assert_eq!(days_in_month(1936, 2), 29);
+        assert_eq!(days_in_month(1937, 2), 28);
+        assert_eq!(days_in_month(1938, 5), 31);
+        assert_eq!(days_in_month(1938, 4), 30);
+    }
+
+    #[test]
+    fn test_date_to_interval_formats() {
+        assert_eq!(
+            date_to_interval("1938"),
+            Some(("1938-01-01".to_string(), "1938-12-31".to_string()))
+        );
+        assert_eq!(
+            date_to_interval("1936-02"),
+            Some(("1936-02-01".to_string(), "1936-02-29".to_string()))
+        );
+        assert_eq!(
+            date_to_interval("1937-02"),
+            Some(("1937-02-01".to_string(), "1937-02-28".to_string()))
+        );
+        assert_eq!(
+            date_to_interval("1938-05-15"),
+            Some(("1938-05-15".to_string(), "1938-05-15".to_string()))
+        );
+        assert_eq!(date_to_interval("未知"), None);
+        assert_eq!(date_to_interval(""), None);
+    }
+
+    #[test]
+    fn test_matches_interval_overlap_month_precision() {
+        let chunk = DocumentChunk {
+            chunk_id: "c_overlap".to_string(),
+            doc_id: "doc_test".to_string(),
+            doc_title: "论持久战".to_string(),
+            author: "毛泽东".to_string(),
+            period: HistoricalPeriod::WarOfResistance,
+            date: "1938-05".to_string(),
+            volume: "选集第二卷".to_string(),
+            category: "军事".to_string(),
+            tags: vec!["持久战".to_string()],
+            chunk_index: 0,
+            total_chunks: 1,
+            char_count: 30,
+            raw_text: "持久战".to_string(),
+            contextualized_text: "持久战".to_string(),
+            section_path: vec![],
+        };
+
+        // Filter covering part of month: 1938-05-10 to 1938-05-15 (should overlap [1938-05-01, 1938-05-31])
+        let filter_mid = VectorFilter::new().with_date_range("1938-05-10", "1938-05-15");
+        assert!(chunk.date == "1938-05");
+        assert!(filter_mid.matches(&chunk));
+
+        // Filter starting after month: 1938-06-01 (should NOT overlap)
+        let filter_after = VectorFilter::new().with_date_range("1938-06-01", "1938-06-30");
+        assert!(!filter_after.matches(&chunk));
+
+        // Filter ending before month: 1938-04-30 (should NOT overlap)
+        let filter_before = VectorFilter::new().with_date_range("1938-04-01", "1938-04-30");
+        assert!(!filter_before.matches(&chunk));
+    }
+
+    #[test]
+    fn test_matches_leap_year_feb_29() {
+        let chunk_leap = DocumentChunk {
+            chunk_id: "c_leap".to_string(),
+            doc_id: "doc_leap".to_string(),
+            doc_title: "红军东征".to_string(),
+            author: "毛泽东".to_string(),
+            period: HistoricalPeriod::AgrarianRevolutionaryWar,
+            date: "1936-02-29".to_string(),
+            volume: "选集第一卷".to_string(),
+            category: "军事".to_string(),
+            tags: vec![],
+            chunk_index: 0,
+            total_chunks: 1,
+            char_count: 20,
+            raw_text: "红军东征".to_string(),
+            contextualized_text: "红军东征".to_string(),
+            section_path: vec![],
+        };
+
+        let filter_leap = VectorFilter::new().with_date_range("1936-02-01", "1936-02-29");
+        assert!(filter_leap.matches(&chunk_leap));
+
+        let filter_non_leap = VectorFilter::new().with_date_range("1936-03-01", "1936-03-31");
+        assert!(!filter_non_leap.matches(&chunk_leap));
+    }
 }

@@ -1,19 +1,19 @@
 use clap::Parser;
 use mao_agent::cli::{
-    AskArgs, Cli, Commands, EmbedderArgs, IngestArgs, InitSamplesArgs, SearchArgs, StatsArgs,
+    AskArgs, Cli, Commands, EmbedderArgs, IngestArgs, InitSamplesArgs, SearchArgs, ServeArgs,
+    StatsArgs,
 };
 use mao_agent::config::{ProjectConfig, nonempty_key};
 use mao_agent::corpus::chunker::ChunkerConfig;
 use mao_agent::corpus::ingest::CorpusScanner;
 use mao_agent::model::{HistoricalPeriod, VectorFilter};
-#[cfg(feature = "local-embed")]
-use mao_agent::vector::embedder::FastEmbedder;
 use mao_agent::vector::embedder::{
-    COHERE_COMPAT_BASE_URL, DeterministicEmbedder, Embedder, OpenAIEmbedder, create_embedder_arc,
+    Embedder, EmbedderSelection, resolve_embed_dimension, resolve_embedder,
 };
 use mao_agent::vector::store::VectorStore;
+use std::path::Path;
 use std::sync::Arc;
-use tracing::{Level, info};
+use tracing::Level;
 use tracing_subscriber::FmtSubscriber;
 
 #[tokio::main]
@@ -37,6 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Search(args) => handle_search(&args).await?,
         Commands::Stats(args) => handle_stats(&args).await?,
         Commands::Ask(args) => handle_ask(&args).await?,
+        Commands::Serve(args) => handle_serve(&args).await?,
     }
 
     Ok(())
@@ -60,66 +61,49 @@ fn resolve_embed_api_key(args: &EmbedderArgs) -> Option<String> {
     config_cohere_api_key()
 }
 
-fn resolve_chat_api_key(cli_key: Option<String>) -> Option<String> {
+fn resolve_chat_api_key(cli_key: Option<String>, offline: bool) -> Option<String> {
+    if offline {
+        return None;
+    }
     if let Some(key) = nonempty_key(cli_key.as_deref()) {
         return Some(key.to_string());
     }
     config_cohere_api_key()
 }
 
-fn get_embedder(args: &EmbedderArgs) -> Arc<dyn Embedder> {
-    if args.offline {
-        info!(
-            "Using offline Deterministic Embedder ({}-dim)",
-            args.embed_dim
-        );
-        return create_embedder_arc(DeterministicEmbedder::new(args.embed_dim));
-    }
+fn get_embedder(
+    args: &EmbedderArgs,
+    cache_path: Option<&Path>,
+) -> Result<Arc<dyn Embedder>, Box<dyn std::error::Error>> {
+    let selection = EmbedderSelection {
+        offline: args.offline,
+        api_key: resolve_embed_api_key(args),
+        base_url: args.embed_base_url.clone(),
+        model: args.embed_model.clone(),
+        dimension: resolve_embed_dimension(args.offline, args.embed_dim),
+    };
+    Ok(resolve_embedder(&selection, cache_path)?)
+}
 
-    let api_key = resolve_embed_api_key(args);
-    let base_url = args
-        .embed_base_url
-        .clone()
-        .or_else(|| api_key.as_ref().map(|_| COHERE_COMPAT_BASE_URL.to_string()));
-
-    if let Some(base_url) = base_url {
-        info!(
-            "Using remote OpenAI-compatible embedder {} at {} ({}-dim)",
-            args.embed_model, base_url, args.embed_dim
-        );
-        return create_embedder_arc(OpenAIEmbedder::new(
-            base_url,
-            api_key,
-            args.embed_model.clone(),
-            args.embed_dim,
-        ));
-    }
-
-    #[cfg(feature = "local-embed")]
-    {
-        match FastEmbedder::try_new() {
-            Ok(fe) => {
-                info!(
-                    "Using local FastEmbed ONNX BGE-small-zh-v1.5 ({}-dim)",
-                    fe.dimension()
-                );
-                create_embedder_arc(fe)
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "Failed to initialize FastEmbed: {e}. Falling back to deterministic embedder."
-                );
-                create_embedder_arc(DeterministicEmbedder::new(args.embed_dim))
-            }
+fn load_store_interactive(
+    path: &Path,
+    embedder: Arc<dyn Embedder>,
+) -> Result<Option<VectorStore>, Box<dyn std::error::Error>> {
+    match VectorStore::load_from_file(path, embedder) {
+        Ok(s) => Ok(Some(s)),
+        Err(mao_agent::VectorError::IdentityMismatch {
+            snapshot_model,
+            snapshot_dimension,
+            source_model,
+            source_dimension,
+        }) => {
+            eprintln!(
+                "❌ 向量模型不匹配：当前索引 snapshot 采用模型 `{}` ({} 维)，而检索请求配置为 `{}` ({} 维)。\n💡 提示：若需在离线模式下检索，请先运行 `cargo run -- ingest --offline` 重建离线索引；若需在线检索，请移除 `--offline` 参数。",
+                snapshot_model, snapshot_dimension, source_model, source_dimension
+            );
+            Ok(None)
         }
-    }
-    #[cfg(not(feature = "local-embed"))]
-    {
-        info!(
-            "local-embed feature disabled, using Deterministic Embedder ({}-dim)",
-            args.embed_dim
-        );
-        create_embedder_arc(DeterministicEmbedder::new(args.embed_dim))
+        Err(e) => Err(Box::new(e)),
     }
 }
 
@@ -146,7 +130,7 @@ fn build_filter(
 
 async fn handle_ingest(args: &IngestArgs) -> Result<(), Box<dyn std::error::Error>> {
     println!("📚 开始摄取语料库: {}", args.corpus_dir.display());
-    let embedder = get_embedder(&args.embedder);
+    let embedder = get_embedder(&args.embedder, Some(&args.index_file))?;
     let chunker_config = ChunkerConfig {
         max_chars: args.max_chars,
         min_chars: 100,
@@ -302,8 +286,11 @@ async fn search_vector(
         return Ok(());
     }
     let start = std::time::Instant::now();
-    let embedder = get_embedder(&args.embedder);
-    let store = VectorStore::load_from_file(&args.index_file, embedder)?;
+    let embedder = get_embedder(&args.embedder, Some(&args.index_file))?;
+    let store = match load_store_interactive(&args.index_file, embedder)? {
+        Some(s) => s,
+        None => return Ok(()),
+    };
     let results = store.search(&args.query, args.top_k, filter).await?;
     let duration = start.elapsed();
     println!(
@@ -350,16 +337,30 @@ async fn search_hybrid(
     args: &SearchArgs,
     filter: Option<&VectorFilter>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    if !args.index_file.exists() {
+        eprintln!(
+            "❌ 向量索引文件未找到: {}。请先运行 `mao_agent ingest` 构建索引。",
+            args.index_file.display()
+        );
+        return Ok(());
+    }
     let start = std::time::Instant::now();
-    let embedder = get_embedder(&args.embedder);
-    let store = VectorStore::load_from_file(&args.index_file, embedder)?;
+    let embedder = get_embedder(&args.embedder, Some(&args.index_file))?;
+    let store = match load_store_interactive(&args.index_file, embedder)? {
+        Some(s) => s,
+        None => return Ok(()),
+    };
     let vec_results = store.search(&args.query, args.top_k * 2, filter).await?;
 
     let bm25_results = if args.tantivy_dir.exists() {
         let ft_index = mao_agent::index::FullTextIndex::new_in_dir(&args.tantivy_dir)?;
-        ft_index
-            .search(&args.query, args.top_k * 2, filter)
-            .unwrap_or_default()
+        match ft_index.search(&args.query, args.top_k * 2, filter) {
+            Ok(results) => results,
+            Err(e) => {
+                tracing::warn!("BM25 search failed: {e}, continuing with vector-only results.");
+                Vec::new()
+            }
+        }
     } else {
         Vec::new()
     };
@@ -400,8 +401,11 @@ async fn handle_stats(args: &StatsArgs) -> Result<(), Box<dyn std::error::Error>
         return Ok(());
     }
 
-    let embedder = get_embedder(&args.embedder);
-    let store = VectorStore::load_from_file(&args.index_file, embedder)?;
+    let embedder = get_embedder(&args.embedder, Some(&args.index_file))?;
+    let store = match load_store_interactive(&args.index_file, embedder)? {
+        Some(s) => s,
+        None => return Ok(()),
+    };
     let stats = store.stats().await;
 
     println!("\n================ 📊 向量数据库状态报告 ================");
@@ -443,12 +447,52 @@ fn handle_init_samples(args: &InitSamplesArgs) -> Result<(), Box<dyn std::error:
 
     let samples = [
         (
+            "fan_dui_ben_ben_zhu_yi.md",
+            include_str!("assets/samples/fan_dui_ben_ben_zhu_yi.md"),
+        ),
+        (
+            "gai_zao_wo_men_de_xue_xi.md",
+            include_str!("assets/samples/gai_zao_wo_men_de_xue_xi.md"),
+        ),
+        (
+            "guan_yu_ling_dao_fang_fa.md",
+            include_str!("assets/samples/guan_yu_ling_dao_fang_fa.md"),
+        ),
+        (
+            "guan_yu_zheng_que_chu_li_ren_min_nei_bu_mao_dun.md",
+            include_str!("assets/samples/guan_yu_zheng_que_chu_li_ren_min_nei_bu_mao_dun.md"),
+        ),
+        (
+            "hu_nan_nong_min_yun_dong.md",
+            include_str!("assets/samples/hu_nan_nong_min_yun_dong.md"),
+        ),
+        (
             "lun_chi_jiu_zhan.md",
             include_str!("assets/samples/lun_chi_jiu_zhan.md"),
         ),
         (
+            "lun_ren_min_min_zhu_zhuan_zheng.md",
+            include_str!("assets/samples/lun_ren_min_min_zhu_zhuan_zheng.md"),
+        ),
+        (
             "mao_dun_lun.md",
             include_str!("assets/samples/mao_dun_lun.md"),
+        ),
+        (
+            "qi_jie_er_zhong_quan_hui.md",
+            include_str!("assets/samples/qi_jie_er_zhong_quan_hui.md"),
+        ),
+        (
+            "ren_de_zheng_que_si_xiang.md",
+            include_str!("assets/samples/ren_de_zheng_que_si_xiang.md"),
+        ),
+        (
+            "scholarship_domestic_studies.md",
+            include_str!("assets/samples/scholarship_domestic_studies.md"),
+        ),
+        (
+            "scholarship_international_studies.md",
+            include_str!("assets/samples/scholarship_international_studies.md"),
         ),
         (
             "shi_jian_lun.md",
@@ -457,6 +501,10 @@ fn handle_init_samples(args: &InitSamplesArgs) -> Result<(), Box<dyn std::error:
         (
             "xing_xing_zhi_huo.md",
             include_str!("assets/samples/xing_xing_zhi_huo.md"),
+        ),
+        (
+            "zhong_guo_she_hui_ge_jie_ji.md",
+            include_str!("assets/samples/zhong_guo_she_hui_ge_jie_ji.md"),
         ),
     ];
 
@@ -467,7 +515,7 @@ fn handle_init_samples(args: &InitSamplesArgs) -> Result<(), Box<dyn std::error:
     }
 
     println!(
-        "\n已在 `{}` 目录下初始化 4 篇经典文献示例语料！",
+        "\n已在 `{}` 目录下初始化 15 篇经典文献与权威学术研究语料！",
         args.target_dir.display()
     );
     Ok(())
@@ -521,8 +569,11 @@ async fn handle_ask(args: &AskArgs) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    let embedder = get_embedder(&args.embedder);
-    let store = Arc::new(VectorStore::load_from_file(&args.index_file, embedder)?);
+    let embedder = get_embedder(&args.embedder, Some(&args.index_file))?;
+    let store = match load_store_interactive(&args.index_file, embedder)? {
+        Some(s) => Arc::new(s),
+        None => return Ok(()),
+    };
 
     let ft_index = if args.tantivy_dir.exists() {
         match mao_agent::index::FullTextIndex::new_in_dir(&args.tantivy_dir) {
@@ -543,7 +594,7 @@ async fn handle_ask(args: &AskArgs) -> Result<(), Box<dyn std::error::Error>> {
         store,
         ft_index,
         Some(args.base_url.clone()),
-        resolve_chat_api_key(args.api_key.clone()),
+        resolve_chat_api_key(args.api_key.clone(), args.embedder.offline),
         Some(args.model.clone()),
     );
 
@@ -568,5 +619,92 @@ async fn handle_ask(args: &AskArgs) -> Result<(), Box<dyn std::error::Error>> {
     render_retrieved_chunks(&answer.retrieved_chunks);
     println!("\n⚡ 推演总耗时: {:.2?}", duration);
 
+    Ok(())
+}
+
+async fn handle_serve(args: &ServeArgs) -> Result<(), Box<dyn std::error::Error>> {
+    let addr: std::net::SocketAddr = args.bind.parse().map_err(|e| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("Invalid --bind '{}': {e}", args.bind),
+        )
+    })?;
+
+    // 1) Embedder + VectorStore (身份校验与 search 共用同一 embedder)
+    let embedder = get_embedder(&args.embedder, Some(&args.index_file))?;
+    let store = match load_store_interactive(&args.index_file, embedder)? {
+        Some(s) => Arc::new(s),
+        None => return Ok(()),
+    };
+    let stats = store.stats().await;
+    if stats.total_vectors == 0 {
+        eprintln!(
+            "⚠️  向量索引为空 ({}). 建议先运行 `mao_agent ingest` 构建索引。",
+            args.index_file.display()
+        );
+    }
+
+    // 2) Tantivy（可选，缺失时降级为纯向量）
+    let tantivy = if args.tantivy_dir.exists() {
+        match mao_agent::index::FullTextIndex::new_in_dir(&args.tantivy_dir) {
+            Ok(idx) => Some(Arc::new(idx)),
+            Err(e) => {
+                eprintln!("⚠️  Tantivy 索引加载失败: {e}，将以纯向量模式提供服务。");
+                None
+            }
+        }
+    } else {
+        eprintln!(
+            "⚠️  Tantivy 目录未找到 ({}), 混合检索将降级为纯向量。",
+            args.tantivy_dir.display()
+        );
+        None
+    };
+
+    // 3) LLM 兼容配置
+    let chat_base_url = args.base_url.clone();
+    let chat_api_key = resolve_chat_api_key(args.api_key.clone(), args.embedder.offline);
+    let chat_model = args.model.clone();
+
+    println!("\n🚀 Mao Agent API 服务启动中...");
+    println!(" • 监听地址:          http://{addr}");
+    println!(
+        " • 向量索引:          {} ({} chunks, {} 维)",
+        args.index_file.display(),
+        stats.total_vectors,
+        stats.vector_dimension
+    );
+    println!(
+        " • 全文索引:          {} ({})",
+        args.tantivy_dir.display(),
+        if tantivy.is_some() {
+            "已加载"
+        } else {
+            "未加载/降级"
+        }
+    );
+    println!(" • LLM Base URL:      {chat_base_url}");
+    println!(" • 模型:              {chat_model}");
+    println!(
+        " • API Key:           {}",
+        if chat_api_key.is_some() {
+            "已配置"
+        } else {
+            "未配置 (离线推演)"
+        }
+    );
+    println!();
+
+    let hybrid = mao_agent::index::HybridSearchCoordinator::default();
+    mao_agent::server::serve(
+        store,
+        tantivy,
+        hybrid,
+        chat_base_url,
+        chat_api_key,
+        chat_model,
+        addr,
+    )
+    .await?;
     Ok(())
 }

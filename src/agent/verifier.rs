@@ -163,6 +163,8 @@ fn is_chinese_punct(c: char) -> bool {
             | '】'
             | '—'
             | '…'
+            | '·'
+            | '～'
     )
 }
 

@@ -2,9 +2,10 @@ use crate::error::{Result, VectorError};
 use crate::index::tokenizer::JiebaTokenizer;
 use crate::model::{DocumentChunk, VectorFilter};
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::Path;
 use tantivy::collector::TopDocs;
-use tantivy::query::{AllQuery, BooleanQuery, Occur, Query, QueryParser, TermQuery};
+use tantivy::query::{AllQuery, BooleanQuery, Occur, Query, QueryParser, RegexQuery, TermQuery};
 use tantivy::schema::*;
 use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, Term};
 use tracing::debug;
@@ -228,11 +229,72 @@ impl FullTextIndex {
                 ));
             }
             if let Some(ref vol) = f.volume {
-                let term = Term::from_field_text(self.f_volume, vol);
-                clauses.push((
-                    Occur::Must,
-                    Box::new(TermQuery::new(term, IndexRecordOption::Basic)),
-                ));
+                let candidates = generate_volume_candidates(vol);
+                let mut matched_terms = Vec::new();
+                for cand in &candidates {
+                    let term = Term::from_field_text(self.f_volume, cand);
+                    if searcher.doc_freq(&term).unwrap_or(0) > 0 {
+                        matched_terms.push(term);
+                    }
+                }
+
+                if !matched_terms.is_empty() {
+                    if matched_terms.len() == 1 {
+                        clauses.push((
+                            Occur::Must,
+                            Box::new(TermQuery::new(
+                                matched_terms.remove(0),
+                                IndexRecordOption::Basic,
+                            )),
+                        ));
+                    } else {
+                        let term_queries: Vec<(Occur, Box<dyn Query>)> = matched_terms
+                            .into_iter()
+                            .map(|t| {
+                                (
+                                    Occur::Should,
+                                    Box::new(TermQuery::new(t, IndexRecordOption::Basic))
+                                        as Box<dyn Query>,
+                                )
+                            })
+                            .collect();
+                        clauses.push((Occur::Must, Box::new(BooleanQuery::new(term_queries))));
+                    }
+                } else {
+                    let escaped = regex::escape(vol.trim());
+                    if let Ok(rq) =
+                        RegexQuery::from_pattern(&format!(".*{escaped}.*"), self.f_volume)
+                    {
+                        clauses.push((Occur::Must, Box::new(rq)));
+                    } else {
+                        let term = Term::from_field_text(self.f_volume, vol);
+                        clauses.push((
+                            Occur::Must,
+                            Box::new(TermQuery::new(term, IndexRecordOption::Basic)),
+                        ));
+                    }
+                }
+            }
+            if let Some(ref cat) = f.category {
+                let cat_term = Term::from_field_text(self.f_category, cat.trim());
+                if searcher.doc_freq(&cat_term).unwrap_or(0) > 0 {
+                    clauses.push((
+                        Occur::Must,
+                        Box::new(TermQuery::new(cat_term, IndexRecordOption::Basic)),
+                    ));
+                } else {
+                    let escaped = regex::escape(cat.trim());
+                    if let Ok(rq) =
+                        RegexQuery::from_pattern(&format!(".*{escaped}.*"), self.f_category)
+                    {
+                        clauses.push((Occur::Must, Box::new(rq)));
+                    } else {
+                        clauses.push((
+                            Occur::Must,
+                            Box::new(TermQuery::new(cat_term, IndexRecordOption::Basic)),
+                        ));
+                    }
+                }
             }
         }
 
@@ -278,6 +340,46 @@ impl FullTextIndex {
         debug!("BM25 FullText search retrieved {} results", results.len());
         Ok(results)
     }
+}
+
+fn generate_volume_candidates(volume: &str) -> Vec<String> {
+    let trimmed = volume.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+    let mut candidates = Vec::new();
+    let mut seen = HashSet::new();
+
+    let mut add = |s: String| {
+        if !s.is_empty() && seen.insert(s.clone()) {
+            candidates.push(s);
+        }
+    };
+
+    add(trimmed.to_string());
+    if !trimmed.starts_with("毛泽东") {
+        add(format!("毛泽东{trimmed}"));
+        add(format!("毛泽东选集{trimmed}"));
+        add(format!("毛泽东文集{trimmed}"));
+        add(format!("选集{trimmed}"));
+        add(format!("文集{trimmed}"));
+    }
+    if let Some(stripped) = trimmed.strip_prefix("毛泽东") {
+        add(stripped.to_string());
+        if let Some(s2) = stripped
+            .strip_prefix("选集")
+            .or_else(|| stripped.strip_prefix("文集"))
+        {
+            add(s2.to_string());
+        }
+    } else if let Some(s2) = trimmed
+        .strip_prefix("选集")
+        .or_else(|| trimmed.strip_prefix("文集"))
+    {
+        add(s2.to_string());
+    }
+
+    candidates
 }
 
 #[cfg(test)]

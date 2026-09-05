@@ -185,6 +185,61 @@ async fn test_vector_store_multi_attribute_filtering() {
         .unwrap();
     assert_eq!(res4.len(), 1);
     assert_eq!(res4[0].chunk.doc_title, "论持久战");
+
+    // 5. Month-only date boundary filter ("1937-08" matches "1937-08-01" to "1937-08-31")
+    let filter_month = VectorFilter::new().with_date_range("1937-08-01", "1937-08-31");
+    let res5 = store
+        .search("事物与矛盾", 10, Some(&filter_month))
+        .await
+        .unwrap();
+    assert_eq!(res5.len(), 1, "Month-only date must match within range");
+    assert_eq!(res5[0].chunk.doc_title, "矛盾论");
+
+    // 6. Tag filter using inverted tag index
+    let mut filter_tags = VectorFilter::new();
+    filter_tags.tags = Some(vec!["持久战".to_string()]);
+    let res6 = store
+        .search("持久战论述", 10, Some(&filter_tags))
+        .await
+        .unwrap();
+    assert_eq!(res6.len(), 1, "Tag filter must match chunk with tag");
+    assert_eq!(res6[0].chunk.doc_title, "论持久战");
+
+    // 7. Empty periods vec should not wipe candidates
+    let mut filter_empty_periods = VectorFilter::new();
+    filter_empty_periods.periods = Some(vec![]);
+    let res7 = store
+        .search("战略与矛盾", 10, Some(&filter_empty_periods))
+        .await
+        .unwrap();
+    assert_eq!(
+        res7.len(),
+        2,
+        "Empty periods filter must not eliminate all candidates"
+    );
+
+    // 8. Volume substring matching ("第二卷" matches "选集第二卷")
+    let filter_vol_sub = VectorFilter::new().with_volume("第二卷");
+    let res8 = store
+        .search("抗日战争战略", 10, Some(&filter_vol_sub))
+        .await
+        .unwrap();
+    assert_eq!(
+        res8.len(),
+        1,
+        "Volume substring '第二卷' must match '选集第二卷'"
+    );
+    assert_eq!(res8[0].chunk.doc_title, "论持久战");
+
+    // 9. Bidirectional tag matching ("战" matches "持久战")
+    let mut filter_tag_bi = VectorFilter::new();
+    filter_tag_bi.tags = Some(vec!["战".to_string()]);
+    let res9 = store
+        .search("抗日战争", 10, Some(&filter_tag_bi))
+        .await
+        .unwrap();
+    assert_eq!(res9.len(), 1, "Sub-tag '战' must match '持久战'");
+    assert_eq!(res9[0].chunk.doc_title, "论持久战");
 }
 
 #[tokio::test]
@@ -227,6 +282,15 @@ async fn test_persistence_atomic_save_and_reload() {
     let search_res = reloaded.search("航船与红日", 1, None).await.unwrap();
     assert_eq!(search_res.len(), 1);
     assert_eq!(search_res[0].chunk.doc_title, "星星之火，可以燎原");
+
+    // Verify post-reload inverted index retains O(1) volume expansion ("第一卷" matches "毛泽东选集第一卷")
+    let filter_vol = VectorFilter::new().with_volume("第一卷");
+    let vol_res = reloaded
+        .search("航船与红日", 1, Some(&filter_vol))
+        .await
+        .unwrap();
+    assert_eq!(vol_res.len(), 1);
+    assert_eq!(vol_res[0].chunk.doc_title, "星星之火，可以燎原");
 }
 
 #[tokio::test]

@@ -9,10 +9,10 @@ use crate::vector::store::VectorStore;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, LazyLock};
-use tracing::info;
+use tracing::{info, warn};
 
 static QUOTE_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"["“]([^"”]{6,120})["”]"#).unwrap());
+    LazyLock::new(|| Regex::new(r#"["“]([^"”]{6,200})["”]"#).unwrap());
 
 static TITLE_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"《([^》]+)》"#).unwrap());
 
@@ -105,7 +105,13 @@ impl DialecticalAgent {
         // 1. Retrieve evidence chunks (Hybrid search if FullTextIndex is configured, otherwise Vector search)
         let retrieved_chunks: Vec<DocumentChunk> = if let Some(ref ft) = self.fulltext_index {
             let vec_results = self.store.search(question, top_k * 2, filter).await?;
-            let bm25_results = ft.search(question, top_k * 2, filter).unwrap_or_default();
+            let bm25_results = match ft.search(question, top_k * 2, filter) {
+                Ok(results) => results,
+                Err(e) => {
+                    warn!("BM25 search failed: {e}, falling back to vector-only retrieval.");
+                    Vec::new()
+                }
+            };
             let fused = self
                 .hybrid_coordinator
                 .fuse(vec_results, bm25_results, top_k);
@@ -190,7 +196,9 @@ impl DialecticalAgent {
             .into_iter()
             .next()
             .map(|c| c.message.content)
-            .unwrap_or_default();
+            .ok_or_else(|| {
+                VectorError::Other("LLM API returned an empty choices list".to_string())
+            })?;
 
         Ok(answer)
     }
@@ -204,6 +212,7 @@ impl DialecticalAgent {
         let title = &first_chunk.doc_title;
         let date = &first_chunk.date;
         let period = first_chunk.period.as_str();
+        let quote_excerpt = extract_key_quote(&first_chunk.raw_text);
 
         format!(
             r#"### 一、 调查研究 (Fact-Finding & Evidence)
@@ -221,12 +230,7 @@ impl DialecticalAgent {
 1. 深入实际调查，坚决贯彻群众路线；
 2. 集中主要力量解决主要矛盾；
 3. 遵循客观规律，根据时空条件的变化灵活制定战略方针。"#,
-            title,
-            date,
-            period,
-            first_chunk.raw_text.trim(),
-            question,
-            title
+            title, date, period, quote_excerpt, question, title
         )
     }
 
@@ -272,6 +276,33 @@ pub(crate) fn answer_is_fully_grounded(
     has_evidence && !citation_reports.is_empty() && citation_reports.iter().all(|r| r.is_verified)
 }
 
+fn extract_key_quote(raw_text: &str) -> &str {
+    let trimmed = raw_text.trim();
+    // Prefer the first complete sentence ending in '。', '！', '？'
+    for (idx, ch) in trimmed.char_indices() {
+        if ch == '。' || ch == '！' || ch == '？' {
+            let sentence = &trimmed[..idx + ch.len_utf8()];
+            let char_count = sentence.chars().count();
+            if (6..=180).contains(&char_count) {
+                return sentence.trim();
+            }
+        }
+    }
+    // Fallback: take up to first 120 chars bounded by a clause punctuation
+    let char_indices: Vec<(usize, char)> = trimmed.char_indices().collect();
+    if char_indices.len() <= 120 {
+        trimmed
+    } else {
+        for &(idx, ch) in char_indices[60..120].iter().rev() {
+            if ch == '，' || ch == '；' || ch == '、' {
+                return trimmed[..idx + ch.len_utf8()].trim();
+            }
+        }
+        let end_byte = char_indices[120].0;
+        trimmed[..end_byte].trim()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -313,6 +344,9 @@ mod tests {
         assert!(answer.content.contains("主要矛盾分析"));
         assert!(answer.content.contains("论持久战"));
         assert_eq!(answer.retrieved_chunks.len(), 1);
+        assert!(!answer.citation_reports.is_empty());
+        assert!(answer.citation_reports[0].is_verified);
+        assert!(answer.is_fully_grounded);
     }
 
     #[tokio::test]

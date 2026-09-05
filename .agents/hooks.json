@@ -1,0 +1,21 @@
+{
+  "mao-agent-guard": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python ../scripts/hook_guard.py pre-tool"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "python ../scripts/hook_guard.py stop"
+      }
+    ]
+  }
+}

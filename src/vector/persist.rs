@@ -54,12 +54,14 @@ fn decode_snapshot(bytes: &[u8]) -> Result<(Option<SnapshotIdentity>, VectorInde
         }
         let identity: SnapshotIdentity = bincode::deserialize(&rest[..header_len])
             .map_err(|e| VectorError::Deserialization(e.to_string()))?;
-        let index: VectorIndex = bincode::deserialize(&rest[header_len..])
+        let mut index: VectorIndex = bincode::deserialize(&rest[header_len..])
             .map_err(|e| VectorError::Deserialization(e.to_string()))?;
+        index.rebuild_inverted_indices();
         Ok((Some(identity), index))
     } else {
-        let index: VectorIndex =
+        let mut index: VectorIndex =
             bincode::deserialize(bytes).map_err(|e| VectorError::Deserialization(e.to_string()))?;
+        index.rebuild_inverted_indices();
         Ok((None, index))
     }
 }
@@ -95,6 +97,9 @@ fn replace_file(tmp: &Path, dest: &Path) -> std::io::Result<()> {
     const MOVEFILE_REPLACE_EXISTING: u32 = 0x0000_0001;
     const MOVEFILE_WRITE_THROUGH: u32 = 0x0000_0008;
 
+    // SAFETY: `MoveFileExW` is a stable kernel32 API. `wide_path` produces
+    // NUL-terminated UTF-16 buffers, so both pointers stay valid for the whole
+    // call. No other thread mutates the source or destination paths.
     #[link(name = "kernel32")]
     unsafe extern "system" {
         fn MoveFileExW(existing: *const u16, new: *const u16, flags: u32) -> i32;
@@ -109,6 +114,9 @@ fn replace_file(tmp: &Path, dest: &Path) -> std::io::Result<()> {
 
     let src = wide_path(tmp);
     let dst = wide_path(dest);
+    // SAFETY: `src`/`dst` are NUL-terminated and outlive the call; the flags
+    // request an atomic replace plus write-through so a crash cannot leave a
+    // half-written destination.
     let ok = unsafe {
         MoveFileExW(
             src.as_ptr(),

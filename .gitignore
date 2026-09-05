@@ -2,3 +2,11 @@
 config.toml
 .fastembed_cache/
 *.embedcache
+
+# Build outputs (regenerate via `mao_agent ingest`); do not commit binary indexes
+/data
+acceptance_*
+bad_corpus/
+**/__pycache__/
+.pai/
+nul

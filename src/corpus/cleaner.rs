@@ -4,14 +4,14 @@ use std::sync::LazyLock;
 static CJK_SPACE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     // Matches horizontal whitespace between CJK characters, excluding \r and \n
     // CJK range: \u4e00-\u9fff (Basic), \u3400-\u4dbf (Ext A), \uf900-\ufaff (Compatibility), fullwidth punctuation
-    Regex::new(r"([\u4e00-\u9fa5\u3400-\u4dbf\uf900-\ufaff\u3000-\u303f\uff01-\uff5e])[ \t\u3000\u00a0]+([\u4e00-\u9fa5\u3400-\u4dbf\uf900-\ufaff\u3000-\u303f\uff01-\uff5e])").unwrap()
+    Regex::new(r"([\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff\u3000-\u303f\uff01-\uff5e])[ \t\u3000\u00a0]+([\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff\u3000-\u303f\uff01-\uff5e])").unwrap()
 });
 
 static DIGIT_CJK_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"([0-9])[ \t]+([\u4e00-\u9fa5])").unwrap());
+    LazyLock::new(|| Regex::new(r"([0-9])[ \t]+([\u4e00-\u9fff])").unwrap());
 
 static CJK_DIGIT_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"([\u4e00-\u9fa5])[ \t]+([0-9])").unwrap());
+    LazyLock::new(|| Regex::new(r"([\u4e00-\u9fff])[ \t]+([0-9])").unwrap());
 
 static DIGIT_DIGIT_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"([0-9])[ \t]+([0-9])").unwrap());
@@ -26,8 +26,8 @@ pub fn clean_cjk_spaces(text: &str) -> String {
 
     let mut result = text.replace(['\u{3000}', '\u{00a0}'], " ");
 
-    // Clean spaced numbers (e.g. "1 9 4 9" -> "1949")
-    for _ in 0..3 {
+    // Clean spaced numbers (e.g. "1 9 4 9 1 0 0 1" -> "19491001") until fixed point
+    loop {
         let replaced = DIGIT_DIGIT_REGEX.replace_all(&result, "$1$2");
         if replaced == result {
             break;
@@ -35,8 +35,8 @@ pub fn clean_cjk_spaces(text: &str) -> String {
         result = replaced.to_string();
     }
 
-    // Iterative replacement for overlapping CJK spaces (e.g. "毛 泽 东" -> "毛泽东")
-    for _ in 0..3 {
+    // Iterative replacement for overlapping CJK spaces (e.g. "毛 泽 东" -> "毛泽东") until fixed point
+    loop {
         let replaced = CJK_SPACE_REGEX.replace_all(&result, "$1$2");
         if replaced == result {
             break;
@@ -62,6 +62,7 @@ mod tests {
     fn test_clean_cjk_spaces() {
         assert_eq!(clean_cjk_spaces("毛 泽 东 选 集"), "毛泽东选集");
         assert_eq!(clean_cjk_spaces("1 9 4 9 年 1 0 月"), "1949年10月");
+        assert_eq!(clean_cjk_spaces("1 9 4 9 1 0 0 1"), "19491001");
     }
 
     #[test]

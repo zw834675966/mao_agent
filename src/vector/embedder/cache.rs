@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 /// On-disk embed cache: `{index_file}.embedcache` (suffix, not `with_extension`).
-pub fn embed_cache_path(index_file: &Path) -> PathBuf {
+pub(crate) fn embed_cache_path(index_file: &Path) -> PathBuf {
     let mut os = index_file.as_os_str().to_os_string();
     os.push(".embedcache");
     PathBuf::from(os)
@@ -21,7 +21,7 @@ struct EmbedCacheFile {
 }
 
 /// SHA-256 disk cache decorator. Identity (`model_name` / `dimension`) delegates to `inner`.
-pub struct CachedEmbedder {
+pub(crate) struct CachedEmbedder {
     inner: Arc<dyn Embedder>,
     path: PathBuf,
     entries: Mutex<HashMap<String, Vec<f32>>>,
@@ -56,7 +56,12 @@ impl CachedEmbedder {
             entries: entries.clone(),
         };
         let encoded = bincode::serialize(&file)?;
-        atomic_write(path, &encoded)
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)?;
+        }
+        crate::vector::persist::atomic_replace(path, &encoded)
     }
 }
 
@@ -83,33 +88,6 @@ fn sha256_hex(text: &str) -> String {
         out.push(HEX[(b & 0xf) as usize] as char);
     }
     out
-}
-
-/// Sibling `{path}.tmp.{pid}` then rename. First create: dest missing, no delete.
-fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
-    if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        std::fs::create_dir_all(parent)?;
-    }
-    let tmp = {
-        let mut os = path.as_os_str().to_os_string();
-        os.push(format!(".tmp.{}", std::process::id()));
-        PathBuf::from(os)
-    };
-    std::fs::write(&tmp, bytes)?;
-    match std::fs::rename(&tmp, path) {
-        Ok(()) => Ok(()),
-        Err(_) if path.exists() => {
-            std::fs::remove_file(path)?;
-            std::fs::rename(&tmp, path)?;
-            Ok(())
-        }
-        Err(e) => {
-            let _ = std::fs::remove_file(&tmp);
-            Err(e.into())
-        }
-    }
 }
 
 #[async_trait]

@@ -1,6 +1,4 @@
-use crate::vector::embedder::{
-    COHERE_CHAT_MODEL, COHERE_COMPAT_BASE_URL, COHERE_EMBED_MODEL, COHERE_EMBEDDING_DIM,
-};
+use crate::vector::embedder::{COHERE_CHAT_MODEL, COHERE_COMPAT_BASE_URL, COHERE_EMBED_MODEL};
 use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
 
@@ -23,9 +21,9 @@ pub struct EmbedderArgs {
     #[arg(long, default_value = COHERE_EMBED_MODEL)]
     pub embed_model: String,
 
-    /// Embedding dimension. Cohere embed-v4.0 default is 1536; local BGE-small-zh-v1.5 is 512.
-    #[arg(long, default_value_t = COHERE_EMBEDDING_DIM)]
-    pub embed_dim: usize,
+    /// Embedding dimension. Omitted: 512 with `--offline` (local BGE); 1536 for remote/Cohere.
+    #[arg(long)]
+    pub embed_dim: Option<usize>,
 }
 
 #[derive(Parser, Debug)]
@@ -170,6 +168,37 @@ pub struct AskArgs {
     pub embedder: EmbedderArgs,
 }
 
+/// Serve the Mao Agent as a high-performance HTTP API (Axum + Tokio)
+#[derive(Args, Debug, Clone)]
+pub struct ServeArgs {
+    /// Bind address, e.g. 127.0.0.1:3000 or 0.0.0.0:8080
+    #[arg(short, long, default_value = "127.0.0.1:3000")]
+    pub bind: String,
+
+    /// Path to vector index snapshot file
+    #[arg(short, long, default_value = "data/vector_store.bin")]
+    pub index_file: PathBuf,
+
+    /// Path to Tantivy full-text index directory
+    #[arg(long, default_value = "data/tantivy_index")]
+    pub tantivy_dir: PathBuf,
+
+    /// LLM API base URL (OpenAI compatible)
+    #[arg(long, env = "COHERE_BASE_URL", default_value = COHERE_COMPAT_BASE_URL)]
+    pub base_url: String,
+
+    /// LLM API key (`COHERE_API_KEY` / `config.toml` `[cohere].api_key`)
+    #[arg(long, env = "COHERE_API_KEY")]
+    pub api_key: Option<String>,
+
+    /// Chat model id
+    #[arg(long, default_value = COHERE_CHAT_MODEL)]
+    pub model: String,
+
+    #[command(flatten)]
+    pub embedder: EmbedderArgs,
+}
+
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     /// Ingest a corpus directory of Markdown documents into the vector database
@@ -186,4 +215,7 @@ pub enum Commands {
 
     /// Ask the Dialectical Reasoning Agent (Mao Agent) with historical literature grounding
     Ask(AskArgs),
+
+    /// Serve the Mao Agent as a high-performance HTTP API (Axum + Tokio)
+    Serve(ServeArgs),
 }

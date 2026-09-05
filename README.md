@@ -31,7 +31,7 @@
 # 检查编译 (使用轻量 hash 嵌入器，无需下载模型)
 cargo check --no-default-features
 
-# 运行完整测试套件 (34 个单元与集成测试)
+# 运行完整测试套件 (56 个单元与集成测试，含 API 回归 tests/api_test.rs)
 cargo test --no-default-features
 
 # 编译发布版本
@@ -51,7 +51,7 @@ cp config.example.toml config.toml
 
 ```
         ┌──────────────┐
-        │ init-samples │ ──> 生成 4 篇经典文献 Markdown 语料 (corpus/*.md)
+        │ init-samples │ ──> 生成 15 篇经典文献与学术研究语料 (corpus/*.md)
         └──────┬───────┘
                │
                ▼
@@ -69,39 +69,94 @@ cp config.example.toml config.toml
 ### 1. 初始化示例语料
 ```bash
 cargo run -- init-samples
-# 在 corpus/ 目录下生成《论持久战》、《矛盾论》、《实践论》、《星星之火，可以燎原》
 ```
+在 `corpus/` 目录下生成全部 15 篇示例语料（13 篇经典原著 + 2 篇权威学术研究辑要）：
+1. 《中国社会各阶级的分析》 (1925)
+2. 《湖南农民运动考察报告》 (1927)
+3. 《星星之火，可以燎原》 (1930)
+4. 《反对本本主义》 (1930)
+5. 《实践论》 (1937)
+6. 《矛盾论》 (1937)
+7. 《论持久战》 (1938)
+8. 《改造我们的学习》 (1941)
+9. 《关于领导方法的若干问题》 (1943)
+10. 《在中国共产党第七届中央委员会第二次全体会议上的报告》 (1949)
+11. 《论人民民主专政》 (1949)
+12. 《关于正确处理人民内部矛盾的问题》 (1957)
+13. 《人的正确思想是从哪里来的？》 (1963)
+14. 《当代名校名家毛泽东思想与辩证法研究论著集萃》（北京大学、清华大学、中国人民大学等国内学界代表性成果）
+15. 《海外著名学者毛泽东思想与辩证法研究代表性论著集萃》（施拉姆、迈斯纳、奈特、费正清、魏斐德等国际海外汉学代表性成果）
 
 ### 2. 语料库摄取与索引构建
+ingest 与 search/ask **必须使用同一嵌入后端**。混用 `--offline` 与 FastEmbed/Cohere 会因模型或维数不匹配而失败（需重新 ingest）。
+
 ```bash
-# 使用本地/离线嵌入器摄取
+# 无网 / 无 API key：全程 --offline（确定性 hash，默认 512 维）
+cargo run -- ingest --offline --corpus-dir corpus --batch-size 32
+
+# 本地 FastEmbed ONNX BGE-small-zh-v1.5（默认 feature，512 维；首次会下载模型）
+# 不要与 --offline 混用
 cargo run -- ingest --corpus-dir corpus --batch-size 32
 ```
 
 ### 3. 多模式文献检索 (Search)
 ```bash
-# 默认混合检索 (Hybrid BM25 + Vector RRF)
+# 与上一节 --offline ingest 配对
+cargo run -- search --offline "持久战的三个阶段" --top-k 3
+
+# 与 FastEmbed ingest 配对（不要加 --offline）
 cargo run -- search "持久战的三个阶段" --top-k 3
 
-# 纯向量检索 (Dense Vector Only)
-cargo run -- search "主要矛盾和矛盾的主要方面" --mode vector
-
-# 纯全文关键词检索 (BM25 Only)
-cargo run -- search "星星之火可以燎原" --mode bm25
+# 纯向量 / 纯 BM25
+cargo run -- search --offline "主要矛盾和矛盾的主要方面" --mode vector
+cargo run -- search --offline "星星之火可以燎原" --mode bm25
 
 # 结合历史时期与卷册过滤
-cargo run -- search "统一战线" --period "抗日战争时期" --volume "毛泽东选集第二卷"
+cargo run -- search --offline "统一战线" --period "抗日战争时期" --volume "毛泽东选集第二卷"
 ```
 
 ### 4. 向量数据库状态与健康度统计 (Stats)
 ```bash
-cargo run -- stats
+# 与 --offline ingest 配对
+cargo run -- stats --offline
 ```
 
 ### 5. 辩证认知推演与引文核验问答 (Ask)
+无 API key 时走离线辩证模板。嵌入后端仍须与 ingest 一致：
+
 ```bash
-cargo run -- ask "抗日战争为什么是持久战？最后的胜利为什么属于中国？"
+cargo run -- ask --offline "抗日战争为什么是持久战？最后的胜利为什么属于中国？"
 ```
+
+### 6. HTTP API 服务 (Serve, Axum + Tokio)
+将混合检索 / 辩证推演 / 引文核验封装为 REST + SSE 微服务，供上游业务系统或 Agent 调用。嵌入后端仍须与 ingest 一致：
+
+```bash
+cargo run -- serve --offline --bind 127.0.0.1:3000
+```
+
+| 方法与路径 | 说明 |
+|---|---|
+| `GET /health` / `GET /api/v1/health` | 存活与索引状态（chunks 数、维度、tantivy 是否加载） |
+| `GET /api/v1/stats` | 向量库统计（时期/卷册分布、内存预估） |
+| `POST /api/v1/search` | 原子检索：`{query, top_k≤20, mode: hybrid\|vector\|bm25, period/volume/category/tags/start_date/end_date/doc_id/keyword, min_score}` |
+| `POST /api/v1/ask` | 端到端推演（阻塞 JSON）：`{question, top_k≤10, period/volume, base_url/model/api_key}`，`api_key` 也可走 `Authorization: Bearer` 头 |
+| `POST /api/v1/ask/stream` | 端到端推演（SSE）：事件 `retrieved → delta(stage) → citation → done` |
+| `POST /api/v1/verify`（别名 `/api/v1/citation/verify`） | 引文核验：`{quote, claimed_title, context_chunks, min_confidence}`，返回真子串/模糊匹配报告 |
+
+```bash
+# 检索示例
+curl -X POST http://127.0.0.1:3000/api/v1/search \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"持久战三个阶段","top_k":3,"mode":"hybrid"}'
+
+# SSE 推演示例（retrieved → delta → citation → done）
+curl -N -X POST http://127.0.0.1:3000/api/v1/ask/stream \
+  -H 'Content-Type: application/json' \
+  -d '{"question":"抗日战争为什么是持久战？","top_k":2}'
+```
+
+说明：`serve` 启动时加载 `data/vector_store.bin` + `data/tantivy_index`（缺失则自动降级并告警）；LLM 走 OpenAI 兼容协议（默认 Cohere，可配 DeepSeek/Qwen/本地 Ollama），无 key 时 `ask` 自动用离线辩证模板。
 
 ---
 
@@ -151,6 +206,7 @@ mao_agent/
 │   ├── corpus/                    # 文档解析、CJK清洗与语义分块器
 │   ├── vector/                    # 稠密向量存储、内存索引与 Embedding 模型
 │   ├── index/                     # Tantivy 全文倒排索引与 RRF 融合协调器
-│   └── agent/                     # 辩证认知推演引擎与引文真实性核验器
-└── tests/                         # 5 个模块集成测试套件 (E2E & Store)
+│   ├── agent/                     # 辩证认知推演引擎与引文真实性核验器
+│   └── server/                    # Axum HTTP API：DTO/路由/检索·推演SSE·核验 handlers
+└── tests/                         # 6 个模块集成测试套件 (E2E & Store & API)
 ```

@@ -6,7 +6,8 @@ Single-crate Rust project (bin + lib, no workspace): vector database + retrieval
 
 - Entry: `src/main.rs` (CLI), `src/lib.rs` (public API)
 - Modules: `corpus` (markdown parse / CJK clean / semantic chunk), `vector` (embedders, store, index), `index` (Tantivy BM25 + hybrid RRF fusion), `agent` (LLM dialectical reasoning + citation verifier), `cli` (clap definitions), `model` (shared types)
-- No README, no CI, no commits yet on `master`
+- Docs & CI: `README.md`, CI workflow in `.github/workflows/ci.yml`
+- Customizations: Project-specific Antigravity customizations (Skills, Rules, Hooks) reside in `.agents/`
 
 ## Commands
 
@@ -16,6 +17,14 @@ cargo test                                 # run all tests (slow first build: co
 cargo test --no-default-features           # skip fastembed dep tree — tests still all pass
 cargo test --no-default-features <name>    # single test, e.g. test_persistence_atomic_save_and_reload
 cargo test --no-default-features --test vector_store_test   # single integration file
+```
+
+Official CI code quality gates:
+
+```bash
+cargo fmt --check
+cargo clippy --no-default-features --all-targets -- -D warnings
+cargo test --no-default-features
 ```
 
 Use `--no-default-features` for routine test runs. Tests use `DeterministicEmbedder` (hash-based, no network); only the CLI binary path uses FastEmbed or Cohere.
@@ -29,7 +38,7 @@ Use `--no-default-features` for routine test runs. Tests use `DeterministicEmbed
 `cargo run -- ` subcommands: `init-samples`, `ingest`, `search`, `stats`, `ask`.
 
 - Ingest order matters: `init-samples` (creates `corpus/*.md`) → `ingest` (builds `data/vector_store.bin` + `data/tantivy_index/`) → `search`/`ask` read those artifacts. Search commands error politely if indexes are missing.
-- `data/` artifacts are committed outputs; regenerate via `cargo run -- ingest` after corpus changes. Don't hand-edit.
+- `data/` artifacts are gitignored build outputs; regenerate via `cargo run -- ingest` after corpus changes. Don't hand-edit.
 - Cohere key resolution: `--api-key` / `--embed-api-key` → `COHERE_API_KEY` / `EMBED_API_KEY` → `config.toml` `[cohere].api_key`. Copy `config.example.toml` → `config.toml` (gitignored). Never commit the key. `ask` default model `command-r7b-12-2024`; without a key it falls back to `generate_offline_dialectical_answer`.
 - `search --mode` accepts `hybrid` (default, RRF fusion), `vector`, `bm25`.
 

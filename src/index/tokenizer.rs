@@ -2,13 +2,6 @@ use jieba_rs::{Jieba, TokenizeMode};
 use std::sync::Arc;
 use tantivy::tokenizer::{Token, TokenStream, Tokenizer};
 
-fn char_to_byte(text: &str, char_idx: usize) -> usize {
-    text.char_indices()
-        .nth(char_idx)
-        .map(|(i, _)| i)
-        .unwrap_or(text.len())
-}
-
 /// Domain-specific Chinese Jieba tokenizer for Tantivy.
 #[derive(Clone)]
 pub struct JiebaTokenizer {
@@ -81,6 +74,19 @@ impl Tokenizer for JiebaTokenizer {
         let words = self.jieba.tokenize(text, TokenizeMode::Search, true);
         let mut tokens = Vec::with_capacity(words.len());
 
+        // Precompute single-pass char-to-byte offsets for O(1) token boundary lookups
+        let mut char_to_byte: Vec<usize> = text.char_indices().map(|(b, _)| b).collect();
+        char_to_byte.push(text.len());
+
+        let byte_len = text.len();
+        let lookup_offset = |char_idx: usize| -> usize {
+            if char_idx < char_to_byte.len() {
+                char_to_byte[char_idx]
+            } else {
+                byte_len
+            }
+        };
+
         for (i, token) in words.into_iter().enumerate() {
             let trimmed = token.word.trim();
             // Skip empty/pure whitespace tokens
@@ -89,8 +95,8 @@ impl Tokenizer for JiebaTokenizer {
             }
 
             tokens.push(Token {
-                offset_from: char_to_byte(text, token.start),
-                offset_to: char_to_byte(text, token.end),
+                offset_from: lookup_offset(token.start),
+                offset_to: lookup_offset(token.end),
                 position: i,
                 text: token.word.to_string(),
                 position_length: 1,

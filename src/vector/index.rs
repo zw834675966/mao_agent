@@ -26,6 +26,41 @@ pub struct VectorIndex {
     tag_index: HashMap<String, Vec<usize>>,
 }
 
+/// Extract canonical volume lookup keys (e.g. "第二卷", "选集第二卷", "毛泽东选集第二卷")
+/// for O(1) inverted index resolution.
+pub(crate) fn extract_volume_lookup_keys(volume: &str) -> Vec<String> {
+    let trimmed = volume.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+    let mut keys = HashSet::new();
+    keys.insert(trimmed.to_string());
+
+    if let Some(stripped) = trimmed.strip_prefix("毛泽东") {
+        keys.insert(stripped.to_string());
+        if let Some(s2) = stripped
+            .strip_prefix("选集")
+            .or_else(|| stripped.strip_prefix("文集"))
+        {
+            keys.insert(s2.to_string());
+        }
+    } else if let Some(s2) = trimmed
+        .strip_prefix("选集")
+        .or_else(|| trimmed.strip_prefix("文集"))
+    {
+        keys.insert(s2.to_string());
+    }
+
+    if !trimmed.contains("选集") && !trimmed.contains("文集") {
+        keys.insert(format!("选集{trimmed}"));
+        keys.insert(format!("毛泽东选集{trimmed}"));
+    } else if !trimmed.starts_with("毛泽东") {
+        keys.insert(format!("毛泽东{trimmed}"));
+    }
+
+    keys.into_iter().collect()
+}
+
 impl VectorIndex {
     /// Create a new empty VectorIndex with expected vector dimension.
     pub fn new(dimension: usize) -> Self {
@@ -79,18 +114,18 @@ impl VectorIndex {
                 .entry(entry.chunk.period)
                 .or_default()
                 .push(idx);
-            if !entry.chunk.volume.is_empty() {
-                self.volume_index
-                    .entry(entry.chunk.volume.clone())
-                    .or_default()
-                    .push(idx);
+            for v_key in extract_volume_lookup_keys(&entry.chunk.volume) {
+                self.volume_index.entry(v_key).or_default().push(idx);
             }
             self.doc_index
                 .entry(entry.chunk.doc_id.clone())
                 .or_default()
                 .push(idx);
             for tag in &entry.chunk.tags {
-                self.tag_index.entry(tag.clone()).or_default().push(idx);
+                self.tag_index
+                    .entry(tag.trim().to_string())
+                    .or_default()
+                    .push(idx);
             }
 
             self.id_to_idx.insert(id, idx);
@@ -102,8 +137,46 @@ impl VectorIndex {
 
     /// Batch insert multiple VectorEntries.
     pub fn insert_batch(&mut self, entries: Vec<VectorEntry>) -> Result<()> {
-        for entry in entries {
-            self.insert(entry)?;
+        let mut had_update = false;
+        for mut entry in entries {
+            if entry.vector.len() != self.dimension {
+                return Err(VectorError::DimensionMismatch {
+                    expected: self.dimension,
+                    actual: entry.vector.len(),
+                });
+            }
+            normalize_in_place(&mut entry.vector);
+
+            let id = entry.id.clone();
+            if let Some(&existing_idx) = self.id_to_idx.get(&id) {
+                self.entries[existing_idx] = entry;
+                had_update = true;
+            } else {
+                let idx = self.entries.len();
+                self.period_index
+                    .entry(entry.chunk.period)
+                    .or_default()
+                    .push(idx);
+                for v_key in extract_volume_lookup_keys(&entry.chunk.volume) {
+                    self.volume_index.entry(v_key).or_default().push(idx);
+                }
+                self.doc_index
+                    .entry(entry.chunk.doc_id.clone())
+                    .or_default()
+                    .push(idx);
+                for tag in &entry.chunk.tags {
+                    self.tag_index
+                        .entry(tag.trim().to_string())
+                        .or_default()
+                        .push(idx);
+                }
+                self.id_to_idx.insert(id, idx);
+                self.entries.push(entry);
+            }
+        }
+
+        if had_update {
+            self.rebuild_inverted_indices();
         }
         Ok(())
     }
@@ -203,6 +276,66 @@ impl VectorIndex {
             }
         }
 
+        // Filter by multiple periods (guard empty periods vec)
+        if let Some(ref periods) = f.periods
+            && !periods.is_empty()
+        {
+            let mut p_set = HashSet::new();
+            for p in periods {
+                if let Some(indices) = self.period_index.get(p) {
+                    p_set.extend(indices.iter().copied());
+                }
+            }
+            candidate_set = match candidate_set {
+                Some(existing) => Some(existing.intersection(&p_set).copied().collect()),
+                None => Some(p_set),
+            };
+        }
+
+        // Filter by volume (O(1) hash lookup with bidirectional fallback)
+        if let Some(ref vol) = f.volume {
+            let vol_trimmed = vol.trim();
+            let vol_matched: HashSet<usize> =
+                if let Some(indices) = self.volume_index.get(vol_trimmed) {
+                    indices.iter().copied().collect()
+                } else {
+                    let mut matched = HashSet::new();
+                    for (v_key, indices) in &self.volume_index {
+                        if v_key.contains(vol_trimmed) || vol_trimmed.contains(v_key) {
+                            matched.extend(indices.iter().copied());
+                        }
+                    }
+                    matched
+                };
+            candidate_set = match candidate_set {
+                Some(existing) => Some(existing.intersection(&vol_matched).copied().collect()),
+                None => Some(vol_matched),
+            };
+        }
+
+        // Filter by required tags (O(1) hash lookup with bidirectional fallback)
+        if let Some(ref tags) = f.tags {
+            for tag in tags {
+                let tag_trimmed = tag.trim();
+                let tag_matched: HashSet<usize> =
+                    if let Some(indices) = self.tag_index.get(tag_trimmed) {
+                        indices.iter().copied().collect()
+                    } else {
+                        let mut matched = HashSet::new();
+                        for (t_key, indices) in &self.tag_index {
+                            if t_key.contains(tag_trimmed) || tag_trimmed.contains(t_key) {
+                                matched.extend(indices.iter().copied());
+                            }
+                        }
+                        matched
+                    };
+                candidate_set = match candidate_set {
+                    Some(existing) => Some(existing.intersection(&tag_matched).copied().collect()),
+                    None => Some(tag_matched),
+                };
+            }
+        }
+
         // Filter by doc_id
         if let Some(ref doc_id) = f.doc_id {
             if let Some(indices) = self.doc_index.get(doc_id) {
@@ -280,7 +413,7 @@ impl VectorIndex {
         }
     }
 
-    fn rebuild_inverted_indices(&mut self) {
+    pub(crate) fn rebuild_inverted_indices(&mut self) {
         self.id_to_idx.clear();
         self.period_index.clear();
         self.volume_index.clear();
@@ -293,18 +426,18 @@ impl VectorIndex {
                 .entry(entry.chunk.period)
                 .or_default()
                 .push(idx);
-            if !entry.chunk.volume.is_empty() {
-                self.volume_index
-                    .entry(entry.chunk.volume.clone())
-                    .or_default()
-                    .push(idx);
+            for v_key in extract_volume_lookup_keys(&entry.chunk.volume) {
+                self.volume_index.entry(v_key).or_default().push(idx);
             }
             self.doc_index
                 .entry(entry.chunk.doc_id.clone())
                 .or_default()
                 .push(idx);
             for tag in &entry.chunk.tags {
-                self.tag_index.entry(tag.clone()).or_default().push(idx);
+                self.tag_index
+                    .entry(tag.trim().to_string())
+                    .or_default()
+                    .push(idx);
             }
         }
     }

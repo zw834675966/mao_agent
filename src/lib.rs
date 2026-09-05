@@ -5,6 +5,7 @@ pub mod corpus;
 pub mod error;
 pub mod index;
 pub mod model;
+pub mod server;
 pub mod vector;
 
 pub use agent::{
@@ -26,6 +27,7 @@ pub use model::{
 pub use vector::FastEmbedder;
 pub use vector::{
     COHERE_CHAT_MODEL, COHERE_COMPAT_BASE_URL, COHERE_EMBED_MODEL, COHERE_EMBEDDING_DIM,
-    DeterministicEmbedder, Embedder, LOCAL_EMBEDDING_DIM, OpenAIEmbedder, VectorIndex, VectorStore,
-    create_embedder_arc, join_openai_path,
+    DeterministicEmbedder, Embedder, EmbedderSelection, LOCAL_EMBEDDING_DIM, OpenAIEmbedder,
+    VectorIndex, VectorStore, create_embedder_arc, join_openai_path, resolve_embed_dimension,
+    resolve_embedder,
 };

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use tracing::info;
 
 mod cache;
-pub use cache::{CachedEmbedder, embed_cache_path};
+pub(crate) use cache::{CachedEmbedder, embed_cache_path};
 
 /// Default dimension for the local Chinese BGE-small-zh-v1.5 embedder (CLI path).
 pub const LOCAL_EMBEDDING_DIM: usize = 512;
@@ -118,11 +118,11 @@ impl Embedder for DeterministicEmbedder {
 }
 
 fn hash_str(s: &str) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut hasher = DefaultHasher::new();
-    s.hash(&mut hasher);
-    hasher.finish()
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(s.as_bytes());
+    let result = hasher.finalize();
+    u64::from_le_bytes(result[..8].try_into().expect("SHA-256 digest is 32 bytes"))
 }
 
 // ============================================================================
@@ -208,6 +208,14 @@ impl Embedder for OpenAIEmbedder {
 
         let mut parsed: EmbeddingResponse = resp.json().await.map_err(VectorError::HttpError)?;
         parsed.data.sort_by_key(|d| d.index);
+
+        if parsed.data.len() != texts.len() {
+            return Err(VectorError::EmbeddingError(format!(
+                "Embedding API returned {} vectors for {} input texts",
+                parsed.data.len(),
+                texts.len()
+            )));
+        }
 
         let mut embeddings: Vec<Vec<f32>> = parsed.data.into_iter().map(|d| d.embedding).collect();
         for emb in &mut embeddings {
@@ -320,13 +328,35 @@ pub fn create_embedder_arc(embedder: impl Embedder + 'static) -> Arc<dyn Embedde
 }
 
 /// CLI/lib selection for [`resolve_embedder`]. Empty `api_key` is treated as unset.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct EmbedderSelection {
     pub offline: bool,
     pub api_key: Option<String>,
     pub base_url: Option<String>,
     pub model: String,
     pub dimension: usize,
+}
+
+impl std::fmt::Debug for EmbedderSelection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EmbedderSelection")
+            .field("offline", &self.offline)
+            .field("api_key", &self.api_key.as_ref().map(|_| "[redacted]"))
+            .field("base_url", &self.base_url)
+            .field("model", &self.model)
+            .field("dimension", &self.dimension)
+            .finish()
+    }
+}
+
+/// Default embedding width when the CLI omits `--embed-dim`.
+/// `--offline` matches local BGE (512); otherwise Cohere embed-v4.0 (1536).
+pub fn resolve_embed_dimension(offline: bool, explicit: Option<usize>) -> usize {
+    explicit.unwrap_or(if offline {
+        LOCAL_EMBEDDING_DIM
+    } else {
+        COHERE_EMBEDDING_DIM
+    })
 }
 
 /// Fail-closed embedder construction. Only the remote OpenAI path is cache-wrapped.
@@ -389,7 +419,7 @@ pub fn resolve_embedder(
             "Using local FastEmbed ONNX BGE-small-zh-v1.5 ({}-dim)",
             fe.dimension()
         );
-        return Ok(create_embedder_arc(fe));
+        Ok(create_embedder_arc(fe))
     }
 
     #[cfg(not(feature = "local-embed"))]
@@ -420,6 +450,14 @@ mod tests {
             sim > 0.0,
             "Similar texts should have positive cosine similarity"
         );
+    }
+
+    #[test]
+    fn test_resolve_embed_dimension_defaults_and_explicit() {
+        assert_eq!(resolve_embed_dimension(true, None), LOCAL_EMBEDDING_DIM);
+        assert_eq!(resolve_embed_dimension(false, None), COHERE_EMBEDDING_DIM);
+        assert_eq!(resolve_embed_dimension(true, Some(1536)), 1536);
+        assert_eq!(resolve_embed_dimension(false, Some(512)), 512);
     }
 
     #[test]

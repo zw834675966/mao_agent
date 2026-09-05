@@ -1,0 +1,25 @@
+# mao_agent
+
+> High-performance vector database, Tantivy BM25 full-text engine, and dialectical cognitive reasoning engine for Chinese historical literature.
+
+## Project Identity & Architecture
+- Language: Rust 2024 Edition (Single crate, bin + lib)
+- Capabilities: Dual-path hybrid retrieval (Dense embeddings + Tantivy BM25 RRF fusion), Materialist Dialectical 4-stage deduction, True-substring citation grounding verifier.
+- CLI Entry: `src/main.rs`
+- Library Entry: `src/lib.rs`
+
+## Golden Rules for AI Agents
+- Always use `--no-default-features` for all `cargo` invocations to guarantee fast, offline, deterministic execution without downloading the multi-hundred MB ONNX fastembed model.
+- Never edit binary or index artifacts in `data/` directly; always regenerate via `cargo run --no-default-features -- ingest`.
+- For offline operation or when no Cohere API key is configured, pass `--offline` to `ask` and `search`.
+
+## Primary Agent Workflows
+- Full-text & Semantic Search: `cargo run --no-default-features -- search "<query>" --top-k 5 --mode hybrid`
+- Dialectical Q&A Consultation: `cargo run --no-default-features -- ask "<question>" [--offline]`
+- Check Database & Index Status: `cargo run --no-default-features -- stats`
+- Rebuild Ingestion Pipeline: `cargo run --no-default-features -- init-samples && cargo run --no-default-features -- ingest --corpus-dir corpus --batch-size 32`
+
+## Documentation Links
+- [Agent Operational & Tool Specification](AGENT_INSTRUCTIONS.md): Detailed CLI schemas, regex parsing rules, Rust API code examples, and automated self-healing runbook.
+- [Project Architecture & Commands](AGENTS.md): Internal build instructions, feature flags, and official CI gates.
+- [User Manual](README.md): High-level feature highlights and background context.

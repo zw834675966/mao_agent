@@ -94,14 +94,17 @@ impl MarkdownParser {
 }
 
 fn generate_doc_id(title: &str, date: &str, volume: &str) -> String {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
+    use sha2::{Digest, Sha256};
 
-    let mut hasher = DefaultHasher::new();
-    title.hash(&mut hasher);
-    date.hash(&mut hasher);
-    volume.hash(&mut hasher);
-    format!("doc_{:016x}", hasher.finish())
+    let mut hasher = Sha256::new();
+    hasher.update(title.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(date.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(volume.as_bytes());
+    let result = hasher.finalize();
+    let num = u64::from_be_bytes(result[..8].try_into().expect("SHA-256 digest is 32 bytes"));
+    format!("doc_{num:016x}")
 }
 
 fn extract_footnotes(text: &str) -> (String, Vec<String>) {
