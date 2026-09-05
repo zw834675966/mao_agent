@@ -109,6 +109,25 @@ async fn test_health_reports_loaded_index() {
 }
 
 #[tokio::test]
+async fn test_health_returns_503_when_index_empty() {
+    let store = Arc::new(VectorStore::new_deterministic(128));
+    let state = AppState::new(
+        store,
+        None,
+        HybridSearchCoordinator::default(),
+        None,
+        "http://127.0.0.1:9".to_string(),
+        None,
+        "test-model".to_string(),
+    );
+    let (status, Json(body)) = health::handle_health(State(state)).await;
+    assert_eq!(status, axum::http::StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body.status, "unavailable");
+    assert!(!body.index_loaded);
+    assert_eq!(body.total_vectors, 0);
+}
+
+#[tokio::test]
 async fn test_search_hybrid_top_hit() {
     let state = test_state().await;
     let (_status, Json(body)) =

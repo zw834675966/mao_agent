@@ -11,7 +11,8 @@ pub mod server;
 pub mod vector;
 
 pub use agent::{
-    AgentAnswer, CitationVerifier, DIALECTICAL_SYSTEM_PROMPT, DialecticalAgent, VerificationReport,
+    AgentAnswer, CitationVerifier, DIALECTICAL_SYSTEM_PROMPT, DialecticalAgent, FallbackLlmClient,
+    LlmClient, OfflineLlmClient, OnlineLlmClient, VerificationReport,
 };
 pub use corpus::{
     ChineseSemanticChunker, ChunkerConfig, CorpusScanner, MarkdownParser, clean_cjk_spaces,

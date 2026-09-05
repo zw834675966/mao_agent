@@ -334,7 +334,12 @@ impl VectorFilter {
                 }
             }
         }
-        if (self.start_date.is_some() || self.end_date.is_some()) && chunk.date != "未知" {
+        if self.start_date.is_some() || self.end_date.is_some() {
+            // Unknown / empty dates must not silently pass interval filters.
+            let date_trim = chunk.date.trim();
+            if date_trim.is_empty() || date_trim == "未知" {
+                return false;
+            }
             if let Some((chunk_start, chunk_end)) = date_to_interval(&chunk.date) {
                 if let Some(ref start) = self.start_date {
                     let filter_start = date_to_interval(start)
@@ -353,16 +358,8 @@ impl VectorFilter {
                     }
                 }
             } else {
-                if let Some(ref start) = self.start_date
-                    && chunk.date.as_str() < start.as_str()
-                {
-                    return false;
-                }
-                if let Some(ref end) = self.end_date
-                    && chunk.date.as_str() > end.as_str()
-                {
-                    return false;
-                }
+                // Unparseable non-unknown dates: fail closed under interval filters.
+                return false;
             }
         }
         if let Some(ref doc_id) = self.doc_id
@@ -474,6 +471,36 @@ mod tests {
         // Filter ending before month: 1938-04-30 (should NOT overlap)
         let filter_before = VectorFilter::new().with_date_range("1938-04-01", "1938-04-30");
         assert!(!filter_before.matches(&chunk));
+    }
+
+    #[test]
+    fn test_unknown_date_fails_interval_filter() {
+        let chunk_unknown = DocumentChunk {
+            chunk_id: "c_unknown".to_string(),
+            doc_id: "doc_unknown".to_string(),
+            doc_title: "未注明日期文稿".to_string(),
+            author: "毛泽东".to_string(),
+            period: HistoricalPeriod::Unknown,
+            date: "未知".to_string(),
+            volume: "选集".to_string(),
+            category: "其他".to_string(),
+            tags: vec![],
+            chunk_index: 0,
+            total_chunks: 1,
+            char_count: 10,
+            raw_text: "内容".to_string(),
+            contextualized_text: "内容".to_string(),
+            section_path: vec![],
+        };
+        let filter = VectorFilter::new().with_date_range("1937-01-01", "1945-12-31");
+        assert!(
+            !filter.matches(&chunk_unknown),
+            "chunk.date == \"未知\" must not silently pass date interval filters"
+        );
+
+        let mut chunk_empty = chunk_unknown.clone();
+        chunk_empty.date = String::new();
+        assert!(!filter.matches(&chunk_empty));
     }
 
     #[test]
