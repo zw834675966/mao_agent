@@ -33,10 +33,15 @@
   - `SseRerankedEvent { applied, chunk_ids, scores? }` always after `retrieved`
   - `test_ask_stream_emits_event_sequence` expects retrieved → reranked → delta → citation → done
   - MockReranker / `no_rerank` / None-reranker search tests + concurrency smoke
-- [ ] Cycle 5: citation adversarial
+- [x] Cycle 5: citation adversarial + dialectical four-stage structure
+  - Hardened `CitationVerifier`: equal-length JW window + Levenshtein edit budget (0 for short quotes <40 chars)
+  - `test_adversarial_citation_rejection_suite`: exact conf==1.0; synonym/reorder/fabricated/cross-doc/noise -> 100% reject
+  - `test_offline_dialectical_four_stage_structure`: four stage headings in order
+  - Gates: fmt / clippy -D warnings / cargo test --no-default-features
 - [ ] Cycle 6: cleanup → 70+ tests
 
 ## Checkpoint
 
 - [x] Cycle 1 gates green
 - [x] Cycle 2 gates green (fmt/clippy/test; eval-retrieval smoke offline)
+- [x] Cycle 5 gates green (adversarial citation 100% reject; four-stage structure; fmt/clippy/test)

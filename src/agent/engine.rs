@@ -373,4 +373,51 @@ mod tests {
         assert!(!answer_is_fully_grounded(false, &[]));
         assert!(!answer_is_fully_grounded(true, &[]));
     }
+
+    #[tokio::test]
+    async fn test_offline_dialectical_four_stage_structure() {
+        let store = Arc::new(VectorStore::new_deterministic(128));
+
+        let doc = crate::model::Document {
+            id: "doc_structure".to_string(),
+            metadata: DocumentMetadata {
+                title: "论持久战".to_string(),
+                author: "毛泽东".to_string(),
+                date: "1938-05-26".to_string(),
+                period: "抗日战争时期".to_string(),
+                volume: "毛泽东选集第二卷".to_string(),
+                category: "军事".to_string(),
+                tags: vec!["持久战".to_string()],
+                ..Default::default()
+            },
+            period_enum: HistoricalPeriod::WarOfResistance,
+            headnote: None,
+            content: "中日战争是持久战，最后的胜利是中国的。战争将经历战略防御、战略相持、战略反攻三个阶段。".to_string(),
+            footnotes: vec![],
+            file_path: None,
+        };
+
+        store.index_document(&doc).await.unwrap();
+
+        let agent = DialecticalAgent::new(store, None, None, None, None, None);
+        let answer = agent
+            .ask("抗日战争为什么是持久战？", 3, None)
+            .await
+            .unwrap();
+
+        let stages = ["调查研究", "主要矛盾", "理论综合", "指导实践"];
+        let mut cursor = 0usize;
+        for stage in stages {
+            let found = answer.content[cursor..]
+                .find(stage)
+                .unwrap_or_else(|| panic!("missing dialectical stage `{stage}` in order"));
+            cursor += found + stage.len();
+        }
+        assert!(
+            !answer.citation_reports.is_empty(),
+            "offline template should emit a verifiable quote"
+        );
+        assert!(answer.citation_reports.iter().all(|r| r.is_verified));
+        assert!(answer.is_fully_grounded);
+    }
 }
