@@ -1,27 +1,30 @@
-# Tasks: New-user README and offline embed defaults
+# Tasks: Long-Horizon Retrieval Upgrade
 
-- [x] Task 1: `resolve_embed_dimension`
-  - Acceptance: offline+None → 512; online+None → 1536; `Some(n)` wins
-  - Verify: `cargo test --no-default-features test_resolve_embed_dimension`
-  - Files: `src/vector/embedder/mod.rs`, re-exports
-  - Scope: S
+## Cycle 1 — P0 Cohere Rerank
 
-- [x] Task 2: CLI + `get_embedder`
-  - Acceptance: `--embed-dim` optional; omitted uses Task 1 helper
-  - Verify: same test command + `cargo clippy --no-default-features --all-targets -- -D warnings`
-  - Files: `src/cli/mod.rs`, `src/main.rs`, `src/lib.rs`, `src/vector/mod.rs`
-  - Scope: S
-  - Dependencies: Task 1
+- [ ] TODO-01: Reranker trait + module scaffold
+  - Files: `src/rerank/mod.rs`, `src/rerank/cohere.rs` (stub), `src/lib.rs`, `src/error.rs`
+  - Verify: `cargo check --no-default-features`
+- [ ] TODO-02: CohereReranker POST /v2/rerank + mock reorder test `[1,0,2]`
+  - Files: `src/rerank/cohere.rs`
+  - Verify: `cargo test --no-default-features rerank`
+- [ ] TODO-03: `rerank_score` + `rerank_or_fallback`
+  - Files: `src/index/hybrid.rs`, `src/rerank/mod.rs`
+  - Verify: existing `test_rrf_fusion` + new fallback tests
+- [ ] TODO-04: Wire CLI search/ask + DialecticalAgent + Axum `/api/v1/search`
+  - Flags: `--no-rerank`, `--rerank-model`; offline ⇒ no rerank
+  - Verify: `--help` shows flags; tests green without network
+- [ ] TODO-05: README + gates
+  - Verify: fmt/clippy/test
 
-- [x] Task 3: README
-  - Acceptance: test count matches suite (56); ingest/search same backend; no-network path has `--offline` on both
-  - Verify: grep README for `34` (zero hits) and `--offline` on ingest/search examples
-  - Files: `README.md`
-  - Scope: XS
-  - Dependencies: Task 2 (document actual flags)
+## Cycle 2–6
+
+- [ ] TODO-06..08: eval metrics + queries.jsonl + eval-retrieval
+- [ ] TODO-09..10: HNSW + regression
+- [ ] Cycle 4: SSE reranked + api_test
+- [ ] Cycle 5: citation adversarial
+- [ ] Cycle 6: cleanup → 70+ tests
 
 ## Checkpoint
 
-- [x] `cargo test --no-default-features` (56 passed, tester GO)
-- [x] `cargo fmt --check`
-- [x] `cargo clippy --no-default-features --all-targets -- -D warnings`
+- [ ] Cycle 1 gates green
