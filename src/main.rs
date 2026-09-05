@@ -732,34 +732,23 @@ async fn handle_serve(args: &ServeArgs) -> Result<(), Box<dyn std::error::Error>
     let chat_api_key = resolve_chat_api_key(args.api_key.clone(), args.embedder.offline);
     let chat_model = args.model.clone();
 
-    println!("\n🚀 Mao Agent API 服务启动中...");
-    println!(" • 监听地址:          http://{addr}");
-    println!(
-        " • 向量索引:          {} ({} chunks, {} 维)",
-        args.index_file.display(),
-        stats.total_vectors,
-        stats.vector_dimension
+    tracing::info!("Mao Agent API starting on http://{addr}");
+    tracing::info!(
+        index = %args.index_file.display(),
+        chunks = stats.total_vectors,
+        dim = stats.vector_dimension,
+        "vector index loaded"
     );
-    println!(
-        " • 全文索引:          {} ({})",
-        args.tantivy_dir.display(),
-        if tantivy.is_some() {
-            "已加载"
-        } else {
-            "未加载/降级"
-        }
+    tracing::info!(
+        tantivy = %args.tantivy_dir.display(),
+        loaded = tantivy.is_some(),
+        "full-text index status"
     );
-    println!(" • LLM Base URL:      {chat_base_url}");
-    println!(" • 模型:              {chat_model}");
-    println!(
-        " • API Key:           {}",
-        if chat_api_key.is_some() {
-            "已配置"
-        } else {
-            "未配置 (离线推演)"
-        }
+    tracing::info!(base_url = %chat_base_url, model = %chat_model, "LLM config");
+    tracing::info!(
+        api_key_configured = chat_api_key.is_some(),
+        "LLM credential status"
     );
-    println!();
 
     let hybrid = mao_agent::index::HybridSearchCoordinator::default();
     let reranker = make_reranker(
@@ -770,13 +759,23 @@ async fn handle_serve(args: &ServeArgs) -> Result<(), Box<dyn std::error::Error>
             .as_deref()
             .or(args.embedder.embed_api_key.as_deref()),
     );
-    println!(
-        " • Rerank:             {}",
-        if reranker.is_some() {
-            "已启用 (Cohere)"
-        } else {
-            "未启用 (offline / --no-rerank / 无 key)"
-        }
+    tracing::info!(rerank_enabled = reranker.is_some(), "rerank status");
+    let cors = {
+        let cfg_origins = mao_agent::config::ProjectConfig::try_load_default()
+            .as_ref()
+            .and_then(|c| c.cors_origins())
+            .map(|s| s.to_vec());
+        mao_agent::server::cors::CorsAllowlist::resolve(
+            args.cors_origins.as_deref(),
+            cfg_origins.as_deref(),
+        )
+    };
+    tracing::info!(
+        "CORS allowlist: {:?}",
+        cors.origins()
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .collect::<Vec<_>>()
     );
     mao_agent::server::serve(
         store,
@@ -787,6 +786,7 @@ async fn handle_serve(args: &ServeArgs) -> Result<(), Box<dyn std::error::Error>
         chat_api_key,
         chat_model,
         addr,
+        cors,
     )
     .await?;
     Ok(())

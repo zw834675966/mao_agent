@@ -7,6 +7,7 @@ pub mod eval;
 pub mod index;
 pub mod model;
 pub mod rerank;
+pub mod retry;
 pub mod server;
 pub mod vector;
 

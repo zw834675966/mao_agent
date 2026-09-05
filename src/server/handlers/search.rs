@@ -52,6 +52,16 @@ pub async fn handle_search(
     State(state): State<AppState>,
     Json(req): Json<SearchRequest>,
 ) -> ApiResult<(StatusCode, Json<SearchResponse>)> {
+    let started = Instant::now();
+    let result = handle_search_inner(state.clone(), req).await;
+    state.metrics.record_search(started, result.is_err());
+    result
+}
+
+async fn handle_search_inner(
+    state: AppState,
+    req: SearchRequest,
+) -> ApiResult<(StatusCode, Json<SearchResponse>)> {
     if req.query.trim().is_empty() {
         return Err(ApiError::bad_request("query must not be empty"));
     }

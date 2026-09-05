@@ -219,6 +219,11 @@ pub struct ServeArgs {
     #[arg(long, env = "COHERE_RERANK_MODEL")]
     pub rerank_model: Option<String>,
 
+    /// Comma-separated CORS origin allowlist (default: localhost ports 3000/5173/8080).
+    /// Env: `MAO_CORS_ORIGINS`. Overrides `[server].cors_origins` in config.toml.
+    #[arg(long, env = "MAO_CORS_ORIGINS")]
+    pub cors_origins: Option<String>,
+
     #[command(flatten)]
     pub embedder: EmbedderArgs,
 }

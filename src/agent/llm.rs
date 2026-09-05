@@ -5,6 +5,7 @@ use tracing::warn;
 use crate::agent::prompt::DIALECTICAL_SYSTEM_PROMPT;
 use crate::error::{Result, VectorError};
 use crate::model::DocumentChunk;
+use crate::retry::RetryPolicy;
 use crate::vector::embedder::join_openai_path;
 
 /// LLM backend used by [`crate::agent::DialecticalAgent`].
@@ -46,16 +47,47 @@ struct ChatResponseMessage {
     content: String,
 }
 
+enum LlmAttemptError {
+    Retryable(VectorError),
+    Fatal(VectorError),
+}
+
+impl std::fmt::Display for LlmAttemptError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Retryable(e) | Self::Fatal(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl LlmAttemptError {
+    fn into_vector_error(self) -> VectorError {
+        match self {
+            Self::Retryable(e) | Self::Fatal(e) => e,
+        }
+    }
+}
+
 /// Online OpenAI-compatible chat completions client (Cohere Compat API by default).
 pub struct OnlineLlmClient {
     client: reqwest::Client,
     base_url: String,
     api_key: String,
     model_name: String,
+    retry: RetryPolicy,
 }
 
 impl OnlineLlmClient {
     pub fn new(base_url: String, api_key: String, model_name: String) -> Self {
+        Self::with_retry(base_url, api_key, model_name, RetryPolicy::cohere_http())
+    }
+
+    pub fn with_retry(
+        base_url: String,
+        api_key: String,
+        model_name: String,
+        retry: RetryPolicy,
+    ) -> Self {
         Self {
             client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(60))
@@ -64,18 +96,14 @@ impl OnlineLlmClient {
             base_url: base_url.trim_end_matches('/').to_string(),
             api_key,
             model_name,
+            retry,
         }
     }
-}
 
-#[async_trait]
-impl LlmClient for OnlineLlmClient {
-    async fn generate(
+    async fn generate_once(
         &self,
-        _question: &str,
         user_prompt: &str,
-        _chunks: &[DocumentChunk],
-    ) -> Result<String> {
+    ) -> std::result::Result<String, LlmAttemptError> {
         let url = join_openai_path(&self.base_url, "chat/completions");
         let req_body = ChatCompletionRequest {
             model: &self.model_name,
@@ -99,23 +127,50 @@ impl LlmClient for OnlineLlmClient {
             .json(&req_body)
             .send()
             .await
-            .map_err(VectorError::HttpError)?;
+            .map_err(|e| LlmAttemptError::Retryable(VectorError::HttpError(e)))?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
+        let status = resp.status();
+        if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
-            return Err(VectorError::Other(format!(
-                "LLM API returned HTTP {status}: {body}"
-            )));
+            let err = VectorError::Other(format!("LLM API returned HTTP {status}: {body}"));
+            if RetryPolicy::should_retry_status(status) {
+                return Err(LlmAttemptError::Retryable(err));
+            }
+            return Err(LlmAttemptError::Fatal(err));
         }
 
-        let parsed: ChatCompletionResponse = resp.json().await.map_err(VectorError::HttpError)?;
+        let parsed: ChatCompletionResponse = resp
+            .json()
+            .await
+            .map_err(|e| LlmAttemptError::Fatal(VectorError::HttpError(e)))?;
         parsed
             .choices
             .into_iter()
             .next()
             .map(|c| c.message.content)
-            .ok_or_else(|| VectorError::Other("LLM API returned an empty choices list".to_string()))
+            .ok_or_else(|| {
+                LlmAttemptError::Fatal(VectorError::Other(
+                    "LLM API returned an empty choices list".to_string(),
+                ))
+            })
+    }
+}
+
+#[async_trait]
+impl LlmClient for OnlineLlmClient {
+    async fn generate(
+        &self,
+        _question: &str,
+        user_prompt: &str,
+        _chunks: &[DocumentChunk],
+    ) -> Result<String> {
+        self.retry
+            .run(
+                |_| self.generate_once(user_prompt),
+                |e| matches!(e, LlmAttemptError::Retryable(_)),
+            )
+            .await
+            .map_err(LlmAttemptError::into_vector_error)
     }
 }
 
@@ -165,6 +220,7 @@ impl LlmClient for OfflineLlmClient {
 }
 
 /// Prefer online when a key is configured; on any API failure fall back to offline template.
+/// Online path applies [`RetryPolicy`] first; fallback runs only after retries are exhausted.
 pub struct FallbackLlmClient {
     online: Option<OnlineLlmClient>,
 }
@@ -172,6 +228,10 @@ pub struct FallbackLlmClient {
 impl FallbackLlmClient {
     pub fn from_api_key(base_url: String, api_key: Option<String>, model_name: String) -> Self {
         let online = api_key.map(|key| OnlineLlmClient::new(base_url, key, model_name));
+        Self { online }
+    }
+
+    pub fn from_online(online: Option<OnlineLlmClient>) -> Self {
         Self { online }
     }
 }
@@ -188,7 +248,9 @@ impl LlmClient for FallbackLlmClient {
             match online.generate(question, user_prompt, chunks).await {
                 Ok(text) => return Ok(text),
                 Err(e) => {
-                    warn!("LLM API failed, falling back to offline dialectical template: {e}");
+                    warn!(
+                        "LLM API failed after retries, falling back to offline dialectical template: {e}"
+                    );
                 }
             }
         }
@@ -218,5 +280,81 @@ fn extract_key_quote(raw_text: &str) -> &str {
         }
         let end_byte = char_indices[120].0;
         trimmed[..end_byte].trim()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn online_retries_then_succeeds() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("boom"))
+            .up_to_n_times(2)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "choices": [{"message": {"content": "ok-after-retry"}}]
+            })))
+            .mount(&server)
+            .await;
+
+        let client = OnlineLlmClient::with_retry(
+            server.uri(),
+            "k".into(),
+            "m".into(),
+            RetryPolicy::fast_test(),
+        );
+        let text = client.generate("q", "prompt", &[]).await.unwrap();
+        assert_eq!(text, "ok-after-retry");
+    }
+
+    #[tokio::test]
+    async fn fallback_after_retries_exhausted() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("still-down"))
+            .expect(3)
+            .mount(&server)
+            .await;
+
+        let online = OnlineLlmClient::with_retry(
+            server.uri(),
+            "k".into(),
+            "m".into(),
+            RetryPolicy::fast_test(),
+        );
+        let client = FallbackLlmClient::from_online(Some(online));
+        let chunk = DocumentChunk {
+            chunk_id: "c1".into(),
+            doc_id: "d1".into(),
+            doc_title: "论持久战".into(),
+            author: "毛泽东".into(),
+            period: crate::model::HistoricalPeriod::WarOfResistance,
+            date: "1938-05".into(),
+            volume: "第二卷".into(),
+            category: "军事".into(),
+            tags: vec![],
+            chunk_index: 0,
+            total_chunks: 1,
+            char_count: 20,
+            raw_text: "中日战争是持久战，最后的胜利是中国的。".into(),
+            contextualized_text: "中日战争是持久战，最后的胜利是中国的。".into(),
+            section_path: vec![],
+        };
+        let text = client
+            .generate("q", "prompt", std::slice::from_ref(&chunk))
+            .await
+            .unwrap();
+        assert!(text.contains("调查研究"), "got: {text}");
     }
 }

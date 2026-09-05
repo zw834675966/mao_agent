@@ -7,6 +7,7 @@ use tracing::warn;
 use crate::error::{Result, VectorError};
 use crate::index::HybridSearchResult;
 use crate::rerank::Reranker;
+use crate::retry::RetryPolicy;
 
 /// Official Cohere v2 rerank endpoint (not the OpenAI-compat base).
 pub const COHERE_RERANK_URL: &str = "https://api.cohere.com/v2/rerank";
@@ -21,6 +22,7 @@ pub struct CohereReranker {
     api_key: String,
     model: String,
     base_url: String,
+    retry: RetryPolicy,
 }
 
 #[derive(Serialize)]
@@ -46,6 +48,15 @@ impl CohereReranker {
     /// Create a Cohere reranker. `model` defaults to [`COHERE_RERANK_MODEL`];
     /// `base_url` defaults to [`COHERE_RERANK_URL`] (override for mock servers).
     pub fn new(api_key: String, model: Option<String>, base_url: Option<String>) -> Self {
+        Self::with_retry(api_key, model, base_url, RetryPolicy::cohere_http())
+    }
+
+    pub fn with_retry(
+        api_key: String,
+        model: Option<String>,
+        base_url: Option<String>,
+        retry: RetryPolicy,
+    ) -> Self {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
@@ -58,6 +69,7 @@ impl CohereReranker {
                 .unwrap_or_else(|| COHERE_RERANK_URL.to_string())
                 .trim_end_matches('/')
                 .to_string(),
+            retry,
         }
     }
 
@@ -92,34 +104,63 @@ impl Reranker for CohereReranker {
             .map(|c| c.chunk.raw_text.as_str())
             .collect();
 
-        let body = RerankRequest {
-            model: &self.model,
-            query,
-            documents,
-            top_n,
-        };
-
-        let resp = self
-            .client
-            .post(&self.base_url)
-            .bearer_auth(&self.api_key)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| VectorError::RerankError(format!("HTTP transport: {e}")))?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            return Err(VectorError::RerankError(format!(
-                "Cohere rerank HTTP {status}: {body}"
-            )));
+        enum AttemptErr {
+            Retryable(VectorError),
+            Fatal(VectorError),
+        }
+        impl std::fmt::Display for AttemptErr {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    Self::Retryable(e) | Self::Fatal(e) => write!(f, "{e}"),
+                }
+            }
         }
 
-        let parsed: RerankResponse = resp
-            .json()
+        let parsed = self
+            .retry
+            .run(
+                |_| async {
+                    let body = RerankRequest {
+                        model: &self.model,
+                        query,
+                        documents: documents.clone(),
+                        top_n,
+                    };
+                    let resp = self
+                        .client
+                        .post(&self.base_url)
+                        .bearer_auth(&self.api_key)
+                        .json(&body)
+                        .send()
+                        .await
+                        .map_err(|e| {
+                            AttemptErr::Retryable(VectorError::RerankError(format!(
+                                "HTTP transport: {e}"
+                            )))
+                        })?;
+
+                    let status = resp.status();
+                    if !status.is_success() {
+                        let body = resp.text().await.unwrap_or_default();
+                        let err = VectorError::RerankError(format!(
+                            "Cohere rerank HTTP {status}: {body}"
+                        ));
+                        if RetryPolicy::should_retry_status(status) {
+                            return Err(AttemptErr::Retryable(err));
+                        }
+                        return Err(AttemptErr::Fatal(err));
+                    }
+
+                    resp.json::<RerankResponse>().await.map_err(|e| {
+                        AttemptErr::Fatal(VectorError::RerankError(format!("invalid JSON: {e}")))
+                    })
+                },
+                |e| matches!(e, AttemptErr::Retryable(_)),
+            )
             .await
-            .map_err(|e| VectorError::RerankError(format!("invalid JSON: {e}")))?;
+            .map_err(|e| match e {
+                AttemptErr::Retryable(err) | AttemptErr::Fatal(err) => err,
+            })?;
 
         let mut reranked: Vec<HybridSearchResult> = Vec::with_capacity(parsed.results.len());
         for item in parsed.results {
@@ -275,5 +316,36 @@ mod tests {
             }
             other => panic!("expected RerankError, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn cohere_reranker_retries_then_succeeds() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(503).set_body_string("busy"))
+            .up_to_n_times(2)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [
+                    {"index": 0, "relevance_score": 0.9}
+                ]
+            })))
+            .mount(&server)
+            .await;
+
+        let reranker = CohereReranker::with_retry(
+            "k".into(),
+            None,
+            Some(server.uri()),
+            crate::retry::RetryPolicy::fast_test(),
+        );
+        let candidates = vec![make_result("c0", "a", 1)];
+        let out = reranker.rerank("q", &candidates, 1).await.unwrap();
+        assert_eq!(out[0].chunk_id, "c0");
+        assert_eq!(out[0].rerank_score, Some(0.9));
     }
 }
