@@ -46,3 +46,12 @@
 - [x] Cycle 2 gates green (fmt/clippy/test; eval-retrieval smoke offline)
 - [x] Cycle 5 gates green (adversarial citation 100% reject; four-stage structure; fmt/clippy/test)
 - [x] Cycle 6 gates green (fmt/clippy/test; docs synced; ~77 tests)
+
+## Cycle 7 — Hard-negative retrieval gold
+
+- [x] Audit easy `queries.jsonl`: 100% long `「」` stems → offline Recall@5≈1.0 is weak
+- [x] Add `evals/retrieval/queries_hard.jsonl` (≥20 paraphrase / cross_doc / hard_negative)
+- [x] `GoldQuery` / `GoldQuerySet` lexical hardness helpers + title-stripped substring probe
+- [x] `tests/retrieval_hard_eval_test.rs` (easy saturates; hard resists substring matching)
+- [x] Update `evals/retrieval/BASELINE.md` + README; keep Cycles 1–6 checked
+- [ ] Optional follow-up: live Cohere rerank numbers on hard set (needs API key)

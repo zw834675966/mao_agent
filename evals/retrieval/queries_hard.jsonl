@@ -1,0 +1,26 @@
+{"query": "抗战初期，怎样用中日对比说明既不能速胜也不能亡国？", "expected_chunk_ids": ["doc_021ce9c4d7271db1_chunk_0001"], "filter": {"period": "抗日战争时期"}, "kind": "paraphrase"}
+{"query": "延安抗战讲座里提出的阶段划分，第一阶段敌我攻防态势如何概括？", "expected_chunk_ids": ["doc_021ce9c4d7271db1_chunk_0002"], "filter": null, "kind": "paraphrase"}
+{"query": "认识从哪里开始才靠得住？哪一类活动被当作其他活动的基础？", "expected_chunk_ids": ["doc_1912121e30896ac4_chunk_0000"], "filter": null, "kind": "paraphrase"}
+{"query": "从感觉材料推进到事物本质，中间经历怎样的认识阶段转换？", "expected_chunk_ids": ["doc_1912121e30896ac4_chunk_0001"], "filter": null, "kind": "paraphrase"}
+{"query": "观察事物发展时，外因论与从内部矛盾解释运动有何对立？", "expected_chunk_ids": ["doc_c8b3e41afe2ba6dd_chunk_0000"], "filter": null, "kind": "paraphrase"}
+{"query": "同一法则何以既存在于一切过程，又要求把握每一过程的独特本质？", "expected_chunk_ids": ["doc_c8b3e41afe2ba6dd_chunk_0001"], "filter": null, "kind": "paraphrase"}
+{"query": "面对未弄清的现实问题，为何不能先空谈办法而应先弄清事实？", "expected_chunk_ids": ["doc_0ca8ab3281eafb79_chunk_0000"], "filter": null, "kind": "paraphrase"}
+{"query": "把印刷文字当作天然正确，这种态度在农村工作中会造成什么后果？", "expected_chunk_ids": ["doc_0ca8ab3281eafb79_chunk_0002"], "filter": null, "kind": "paraphrase"}
+{"query": "半殖民地多重列强争夺下，边缘割据为何可能长期站稳？", "expected_chunk_ids": ["doc_2bb308274c50ccec_chunk_0000"], "filter": {"period": "土地革命战争时期"}, "kind": "paraphrase"}
+{"query": "建国前夕总结廿余年道路，国家政权应建立在怎样的阶级基础上？", "expected_chunk_ids": ["doc_f7aafbe9d2349f46_chunk_0000"], "filter": null, "kind": "paraphrase"}
+{"query": "建设年代如何把对抗性冲突与非对抗性冲突严格分开处理？", "expected_chunk_ids": ["doc_7bad38ab80f64d58_chunk_0000"], "filter": {"period": "社会主义革命和建设时期"}, "kind": "paraphrase"}
+{"query": "正确观念既非天赋也非头脑自生，它只能经由哪几类改造世界的活动获得？", "expected_chunk_ids": ["doc_5e8f73aa7a031944_chunk_0000"], "filter": null, "kind": "paraphrase"}
+{"query": "面对乡间剧烈反抗浪潮，领导力量应站在前头、后头还是对面？", "expected_chunk_ids": ["doc_2190778976b22287_chunk_0000"], "filter": null, "kind": "paraphrase"}
+{"query": "为何弄清同盟与打击对象被写成全部工作成败的前提？", "expected_chunk_ids": ["doc_c30af202d45aa950_chunk_0000"], "filter": null, "kind": "paraphrase"}
+{"query": "整顿学风时，研究现状、研究历史与对待经典的三种偏差指什么？", "expected_chunk_ids": ["doc_cff6fd8eec32f215_chunk_0000"], "filter": null, "kind": "paraphrase"}
+{"query": "把分散意见集中起来再回到行动中检验，这一循环在方法上意味着什么？", "expected_chunk_ids": ["doc_f7831fafdec3da8b_chunk_0000"], "filter": null, "kind": "paraphrase"}
+{"query": "胜利在即时，聚集力量的主战场应从何处转移到何处？", "expected_chunk_ids": ["doc_c800c92e710060ff_chunk_0000"], "filter": {"period": "全国解放战争时期"}, "kind": "paraphrase"}
+{"query": "经验上升为思想后再回到改造对象，中间经历几次质的跳跃？", "expected_chunk_ids": ["doc_5e8f73aa7a031944_chunk_0001"], "filter": null, "kind": "paraphrase"}
+{"query": "多对矛盾并存时，为何不能平均用力而要找准决定全局的那一对？", "expected_chunk_ids": ["doc_c8b3e41afe2ba6dd_chunk_0002"], "filter": null, "kind": "paraphrase"}
+{"query": "近代一再师法欧美而未成功，这一失败链条在文中被用来说明什么？", "expected_chunk_ids": ["doc_f7aafbe9d2349f46_chunk_0001"], "filter": null, "kind": "paraphrase"}
+{"query": "国内哲学教授怎样把两论说成危急时刻反教条的利器而非书斋空谈？", "expected_chunk_ids": ["doc_81d5eda5b0509a39_chunk_0000"], "filter": null, "kind": "cross_doc"}
+{"query": "党史学者把指导思想的精髓概括为哪几个彼此支撑的方面？", "expected_chunk_ids": ["doc_81d5eda5b0509a39_chunk_0001"], "filter": null, "kind": "cross_doc"}
+{"query": "那位伦敦汉学考证权威如何讨论外来学说与本土表达的结合？", "expected_chunk_ids": ["doc_1bd3138fda0fb8ad_chunk_0000"], "filter": null, "kind": "cross_doc"}
+{"query": "那位战后美国左翼中国研究者在海外学界通常被如何定位？", "expected_chunk_ids": ["doc_1bd3138fda0fb8ad_chunk_0001"], "filter": null, "kind": "cross_doc"}
+{"query": "要读原著而不是后人集萃：谁先主张情况不明就先别开口下结论？", "expected_chunk_ids": ["doc_0ca8ab3281eafb79_chunk_0001"], "filter": null, "kind": "hard_negative"}
+{"query": "决定全局的那一对关系，应回到哲学原著章节，而不是名校述评辑录。", "expected_chunk_ids": ["doc_c8b3e41afe2ba6dd_chunk_0002"], "filter": null, "kind": "hard_negative"}
