@@ -21,8 +21,8 @@ It is intentionally small-team oriented: one deployable binary, file-backed inde
 | Lifecycle | Graceful shutdown on Ctrl+C / SIGTERM so in-flight requests can drain |
 | Degraded LLM | If a Cohere/chat key is configured but the call fails, fall back to offline dialectical template instead of hard-failing the ask path |
 | Filters | Metadata filters must not silently admit unknown/empty dates |
-| Surface | Default bind `127.0.0.1`; CORS is permissive for intranet SPA prototypes (documented tradeoff) |
-| Ops | Docs (this file + ADRs), gap list, and CI gates (`fmt` / `clippy -D warnings` / `test --no-default-features`) |
+| Surface | Default bind `127.0.0.1`; CORS allowlist (localhost defaults + `--cors-origins` / `MAO_CORS_ORIGINS` / config) — ADR 0004 |
+| Ops | Request-id (`X-Request-Id`), `/metrics` + `/api/v1/metrics`, Cohere chat/rerank retries; docs + CI gates |
 
 B is **not** multi-tenant SaaS, HA clusters, or public internet hardening.
 
@@ -62,5 +62,5 @@ Hybrid retrieve ──► optional Cohere rerank ──► LlmClient
 ## Related docs
 
 - `AGENTS.md` — agent/dev command map and test conventions
-- `docs/adr/` — locked runtime decisions for B-grade P0
+- `docs/adr/` — locked runtime decisions for B-grade P0/P1 (0001–0004)
 - `tasks/todo.md` — cycle checklist + remaining gaps (P0–P3)

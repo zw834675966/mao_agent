@@ -489,3 +489,190 @@ async fn test_handler_concurrency_smoke() {
         assert!(r.is_ok(), "handler returned err: {r:?}");
     }
 }
+
+// ── P1 ops: request-id / metrics / CORS ───────────────────────────────────
+
+#[tokio::test]
+async fn test_request_id_present_on_response() {
+    use axum::body::Body;
+    use axum::http::Request;
+    use mao_agent::server::build_router;
+    use tower::ServiceExt;
+
+    let state = test_state().await;
+    let app = build_router(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let id = response
+        .headers()
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(!id.is_empty(), "X-Request-Id must be present on response");
+}
+
+#[tokio::test]
+async fn test_request_id_propagates_inbound_header() {
+    use axum::body::Body;
+    use axum::http::Request;
+    use mao_agent::server::build_router;
+    use tower::ServiceExt;
+
+    let state = test_state().await;
+    let app = build_router(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .header("x-request-id", "client-corr-123")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        response.headers().get("x-request-id").unwrap(),
+        "client-corr-123"
+    );
+}
+
+#[tokio::test]
+async fn test_metrics_increments_for_search_and_ask() {
+    use axum::body::Body;
+    use axum::http::Request;
+    use mao_agent::server::build_router;
+    use tower::ServiceExt;
+
+    let state = test_state().await;
+    let before = state.metrics.snapshot();
+    assert_eq!(before.search.requests, 0);
+    assert_eq!(before.ask.requests, 0);
+
+    let _ = search::handle_search(State(state.clone()), Json(search_req("持久战", "hybrid")))
+        .await
+        .unwrap();
+
+    let ask_req = AskRequest {
+        question: "抗日战争为什么是持久战？".to_string(),
+        top_k: Some(1),
+        period: None,
+        volume: None,
+        base_url: None,
+        model: None,
+        api_key: None,
+    };
+    let _ = ask::handle_ask(State(state.clone()), HeaderMap::new(), Json(ask_req))
+        .await
+        .unwrap();
+
+    let after = state.metrics.snapshot();
+    assert_eq!(after.search.requests, 1);
+    assert_eq!(after.ask.requests, 1);
+    assert!(after.search.latency_count >= 1);
+    assert!(after.ask.latency_count >= 1);
+
+    let app = build_router(state.clone());
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/metrics")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
+    let text = String::from_utf8(bytes.to_vec()).unwrap();
+    assert!(text.contains("mao_search_requests_total 1"), "{text}");
+    assert!(text.contains("mao_ask_requests_total 1"), "{text}");
+
+    let app = build_router(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/metrics")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+}
+
+#[tokio::test]
+async fn test_cors_rejects_disallowed_origin() {
+    use axum::body::Body;
+    use axum::http::Request;
+    use mao_agent::server::build_router_with_cors;
+    use mao_agent::server::cors::CorsAllowlist;
+    use tower::ServiceExt;
+
+    let state = test_state().await;
+    let cors = CorsAllowlist::from_csv("http://localhost:3000");
+    let app = build_router_with_cors(state, cors);
+
+    // Preflight from evil origin must not reflect that origin.
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("OPTIONS")
+                .uri("/api/v1/search")
+                .header("origin", "https://evil.example")
+                .header("access-control-request-method", "POST")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let allow = response
+        .headers()
+        .get(axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN)
+        .and_then(|v| v.to_str().ok());
+    assert!(
+        allow != Some("https://evil.example"),
+        "disallowed origin must not be reflected, got {allow:?}"
+    );
+
+    // Allowed origin is reflected.
+    let state = test_state().await;
+    let cors = CorsAllowlist::from_csv("http://localhost:3000");
+    let app = build_router_with_cors(state, cors);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("OPTIONS")
+                .uri("/api/v1/search")
+                .header("origin", "http://localhost:3000")
+                .header("access-control-request-method", "POST")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        response
+            .headers()
+            .get(axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN)
+            .and_then(|v| v.to_str().ok()),
+        Some("http://localhost:3000")
+    );
+}
+
+#[tokio::test]
+async fn test_cors_localhost_defaults_documented() {
+    use mao_agent::server::cors::CorsAllowlist;
+    let c = CorsAllowlist::localhost_defaults();
+    assert!(c.contains_origin("http://localhost:3000"));
+    assert!(c.contains_origin("http://127.0.0.1:5173"));
+    assert!(!c.contains_origin("https://evil.example"));
+}

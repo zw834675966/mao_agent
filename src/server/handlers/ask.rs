@@ -99,8 +99,11 @@ pub async fn handle_ask(
     headers: axum::http::HeaderMap,
     Json(req): Json<AskRequest>,
 ) -> ApiResult<(StatusCode, Json<AskResponse>)> {
+    let started = Instant::now();
     let header_api_key = extract_bearer(&headers);
-    handle_ask_inner(state, req, header_api_key).await
+    let result = handle_ask_inner(state.clone(), req, header_api_key).await;
+    state.metrics.record_ask(started, result.is_err());
+    result
 }
 
 fn extract_bearer(headers: &axum::http::HeaderMap) -> Option<String> {
@@ -125,6 +128,7 @@ pub async fn handle_ask_stream(
     Json(req): Json<AskRequest>,
 ) -> ApiResult<Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>>> {
     if req.question.trim().is_empty() {
+        state.metrics.record_ask(Instant::now(), true);
         return Err(ApiError::bad_request("question must not be empty"));
     }
     let header_api_key = extract_bearer(&headers);
@@ -132,6 +136,7 @@ pub async fn handle_ask_stream(
     let filter = build_filter(&req);
     let (base_url, api_key, model) = resolve_chat_overrides(&state, &req, header_api_key);
     let question = req.question.clone();
+    let metrics = Arc::clone(&state.metrics);
 
     let stream = async_stream::stream! {
         let start = Instant::now();
@@ -146,8 +151,12 @@ pub async fn handle_ask_stream(
 
         // 1) Retrieve + generate (reuses DialecticalAgent::ask for now; future: true streaming LLM)
         let answer = match agent.ask(&question, top_k, filter.as_ref()).await {
-            Ok(a) => a,
+            Ok(a) => {
+                metrics.record_ask(start, false);
+                a
+            }
             Err(e) => {
+                metrics.record_ask(start, true);
                 let err_json = serde_json::json!({"error": e.to_string()});
                 if let Ok(ev) = Event::default().event("error").json_data(err_json) {
                     yield Ok(ev);

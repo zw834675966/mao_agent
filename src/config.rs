@@ -7,11 +7,19 @@ use std::path::{Path, PathBuf};
 pub struct ProjectConfig {
     #[serde(default)]
     pub cohere: CohereConfig,
+    #[serde(default)]
+    pub server: ServerConfig,
 }
 
 #[derive(Debug, Default, Deserialize)]
 pub struct CohereConfig {
     pub api_key: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct ServerConfig {
+    /// Explicit CORS origin allowlist (http://host:port). Empty/omitted → localhost defaults.
+    pub cors_origins: Option<Vec<String>>,
 }
 
 impl ProjectConfig {
@@ -39,6 +47,10 @@ impl ProjectConfig {
 
     pub fn cohere_api_key(&self) -> Option<&str> {
         nonempty_key(self.cohere.api_key.as_deref())
+    }
+
+    pub fn cors_origins(&self) -> Option<&[String]> {
+        self.server.cors_origins.as_deref()
     }
 }
 
