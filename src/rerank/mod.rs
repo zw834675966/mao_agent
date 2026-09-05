@@ -54,6 +54,7 @@ mod tests {
             rrf_score: 1.0 / rank as f32,
             bm25_score: None,
             vector_score: None,
+            rerank_score: None,
             rank,
             chunk: make_chunk(id),
         }

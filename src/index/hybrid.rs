@@ -10,6 +10,9 @@ pub struct HybridSearchResult {
     pub rrf_score: f32,
     pub bm25_score: Option<f32>,
     pub vector_score: Option<f32>,
+    /// Cohere (or other) cross-encoder relevance score when rerank was applied.
+    #[serde(default)]
+    pub rerank_score: Option<f32>,
     pub rank: usize,
     pub chunk: DocumentChunk,
 }
@@ -91,6 +94,7 @@ impl HybridSearchCoordinator {
                         rrf_score,
                         bm25_score,
                         vector_score,
+                        rerank_score: None,
                         rank: rank + 1,
                         chunk,
                     }
