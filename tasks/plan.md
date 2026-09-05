@@ -19,18 +19,18 @@ Align CLI `--offline` default dimension with local BGE (512) when `--embed-dim` 
 
 ### Checkpoint: Foundation
 
-- [ ] Focused tests pass
+- [x] Focused tests pass
 
 ### Phase 2: Wire + docs
 
 - [x] Task 2: CLI `Option<usize>` + `get_embedder`
-- [x] Task 3: README ingest/search/`--offline` + test count 44
+- [x] Task 3: README ingest/search/`--offline` + test count 56
 
 ### Checkpoint: Complete
 
-- [ ] `cargo test --no-default-features`
-- [ ] `cargo fmt --check`
-- [ ] `cargo clippy --no-default-features --all-targets -- -D warnings`
+- [x] `cargo test --no-default-features`
+- [x] `cargo fmt --check`
+- [x] `cargo clippy --no-default-features --all-targets -- -D warnings`
 
 ## Risks and Mitigations
 
