@@ -27,7 +27,7 @@ Commit: branch `feat/retrieval-upgrade`, message `feat(eval): add eval-retrieval
 
 - Gold queries are auto-generated from chunk text with deterministic templates; lexical overlap is high, so offline DeterministicEmbedder Recall@5 saturates for vector/hybrid.
 - BM25 leg in `eval-retrieval` uses the stem inside Chinese quotation marks when present — full template questions tokenize into too many AND terms and otherwise return empty under Tantivy QueryParser.
-- --force-brute is wired: forces exact brute-force vector scan (disables HNSW ANN) for recall comparison.
+- `eval-retrieval --force-brute` forces exact brute-force vector scan (disables HNSW ANN) for recall comparison; the flag is not on `search`.
 - **HNSW ANN** activates at HNSW_THRESHOLD=5000 vectors; graph is skipped in serde snapshots and rebuilt on load.
 
 ## Synthetic HNSW recall guard (Cycle 3)
