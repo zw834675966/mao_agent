@@ -3,6 +3,7 @@
 pub mod cohere;
 
 use async_trait::async_trait;
+use tracing::warn;
 
 use crate::error::Result;
 use crate::index::HybridSearchResult;
@@ -20,6 +21,27 @@ pub trait Reranker: Send + Sync {
         candidates: &[HybridSearchResult],
         top_k: usize,
     ) -> Result<Vec<HybridSearchResult>>;
+}
+
+/// Apply rerank when a reranker is present; on `None` or `Err`, truncate candidates to `top_k`
+/// in original fused order (with a warn on error).
+pub async fn rerank_or_fallback(
+    candidates: Vec<HybridSearchResult>,
+    reranker: Option<&dyn Reranker>,
+    query: &str,
+    top_k: usize,
+) -> Vec<HybridSearchResult> {
+    let Some(reranker) = reranker else {
+        return candidates.into_iter().take(top_k).collect();
+    };
+
+    match reranker.rerank(query, &candidates, top_k).await {
+        Ok(reranked) => reranked,
+        Err(e) => {
+            warn!("Rerank failed ({e}); falling back to fused order truncated to top_k={top_k}");
+            candidates.into_iter().take(top_k).collect()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -77,10 +99,29 @@ mod tests {
             let mut out = candidates.to_vec();
             out.reverse();
             for (i, item) in out.iter_mut().enumerate() {
+                item.rerank_score = Some(1.0 - i as f32 * 0.1);
                 item.rank = i + 1;
             }
             out.truncate(top_k);
             Ok(out)
+        }
+    }
+
+    struct FailingReranker;
+
+    #[async_trait]
+    impl Reranker for FailingReranker {
+        fn model_name(&self) -> &str {
+            "fail"
+        }
+
+        async fn rerank(
+            &self,
+            _query: &str,
+            _candidates: &[HybridSearchResult],
+            _top_k: usize,
+        ) -> Result<Vec<HybridSearchResult>> {
+            Err(crate::error::VectorError::RerankError("boom".into()))
         }
     }
 
@@ -97,5 +138,48 @@ mod tests {
         assert_eq!(out[0].chunk_id, "c");
         assert_eq!(out[1].chunk_id, "b");
         assert_eq!(reranker.model_name(), "mock");
+        assert!(out[0].rerank_score.is_some());
+    }
+
+    #[tokio::test]
+    async fn rerank_or_fallback_none_truncates() {
+        let candidates = vec![
+            make_result("a", 1),
+            make_result("b", 2),
+            make_result("c", 3),
+        ];
+        let out = rerank_or_fallback(candidates, None, "q", 2).await;
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].chunk_id, "a");
+        assert_eq!(out[1].chunk_id, "b");
+        assert!(out[0].rerank_score.is_none());
+    }
+
+    #[tokio::test]
+    async fn rerank_or_fallback_err_keeps_fused_order() {
+        let candidates = vec![
+            make_result("a", 1),
+            make_result("b", 2),
+            make_result("c", 3),
+        ];
+        let r = FailingReranker;
+        let out = rerank_or_fallback(candidates, Some(&r as &dyn Reranker), "q", 2).await;
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].chunk_id, "a");
+        assert!(out[0].rerank_score.is_none());
+    }
+
+    #[tokio::test]
+    async fn rerank_or_fallback_ok_uses_reranker() {
+        let candidates = vec![
+            make_result("a", 1),
+            make_result("b", 2),
+            make_result("c", 3),
+        ];
+        let r = MockReranker;
+        let out = rerank_or_fallback(candidates, Some(&r as &dyn Reranker), "q", 2).await;
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].chunk_id, "c");
+        assert!(out[0].rerank_score.is_some());
     }
 }
