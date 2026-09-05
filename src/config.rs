@@ -20,6 +20,10 @@ pub struct CohereConfig {
 pub struct ServerConfig {
     /// Explicit CORS origin allowlist (http://host:port). Empty/omitted → localhost defaults.
     pub cors_origins: Option<Vec<String>>,
+    /// Optional shared bearer token for API auth (see ADR 0005).
+    pub api_token: Option<String>,
+    /// Max concurrent ask/ask-stream handlers (default 32 when unset at CLI).
+    pub max_concurrent_asks: Option<usize>,
 }
 
 impl ProjectConfig {
@@ -51,6 +55,14 @@ impl ProjectConfig {
 
     pub fn cors_origins(&self) -> Option<&[String]> {
         self.server.cors_origins.as_deref()
+    }
+
+    pub fn api_token(&self) -> Option<&str> {
+        nonempty_key(self.server.api_token.as_deref())
+    }
+
+    pub fn max_concurrent_asks(&self) -> Option<usize> {
+        self.server.max_concurrent_asks
     }
 }
 

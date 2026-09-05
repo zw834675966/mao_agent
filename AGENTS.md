@@ -6,7 +6,7 @@ Single-crate Rust project (bin + lib, no workspace): vector database + retrieval
 
 - Entry: `src/main.rs` (CLI), `src/lib.rs` (public API)
 - Modules: `corpus` (markdown parse / CJK clean / semantic chunk), `vector` (embedders, store, HNSW ANN index), `index` (Tantivy BM25 + hybrid RRF fusion), `rerank` (Cohere Reranker + fallback), `retry` (bounded exponential backoff), `eval` (Recall/MRR/NDCG@k), `agent` (LLM dialectical reasoning + LlmClient fallback + citation verifier), `server` (Axum REST + SSE + request-id/metrics/CORS), `cli` (clap definitions), `model` (shared types)
-- Docs & CI: `README.md`, CI workflow in `.github/workflows/ci.yml`; 95 tests under `--no-default-features`
+- Docs & CI: `README.md`, CI workflow in `.github/workflows/ci.yml`; 109 tests under `--no-default-features`
 - Customizations: Project-specific Antigravity customizations (Skills, Rules, Hooks) reside in `.agents/`
 
 ## Commands
@@ -43,7 +43,7 @@ Use `--no-default-features` for routine test runs. Tests use `DeterministicEmbed
 - `search --mode` accepts `hybrid` (default, RRF fusion → optional Cohere rerank-v3.5 → top_k), `vector`, `bm25`. Use `--no-rerank` / `--rerank-model` / `COHERE_RERANK_MODEL`; offline or missing key skips rerank.
 - Vector ANN: HNSW (`hnswlib-rs` / hnsw-stable) activates at ≥5000 vectors; snapshot does not persist the graph (rebuild on load); `--force-brute` forces exact scan for recall comparison.
 - `eval-retrieval`: offline Recall/MRR/NDCG@k over `evals/retrieval/queries.jsonl` (~100+); see `evals/retrieval/BASELINE.md`.
-- `serve`: Axum REST + SSE; ask stream events `retrieved → reranked → delta → citation → done`. Ops: `X-Request-Id`, `GET /metrics` + `/api/v1/metrics`, CORS allowlist (`--cors-origins` / `MAO_CORS_ORIGINS`), Cohere chat/rerank retries then offline fallback.
+- `serve`: Axum REST + SSE; ask stream events `retrieved → reranked → delta → citation → done`. Ops: `X-Request-Id`, `GET /live` (liveness) + `/health` (readiness), `GET /metrics` + `/api/v1/metrics` (incl. `mao_llm_fallback_total`), CORS allowlist (`--cors-origins` / `MAO_CORS_ORIGINS`), optional bearer auth (`--api-token` / `MAO_API_TOKEN`), ask concurrency (`--max-concurrent-asks` / `MAO_MAX_CONCURRENT_ASKS`, default 32), Cohere chat/rerank retries then offline fallback. Runbook: `docs/ops/runbook.md`.
 
 ## Corpus / data conventions
 
@@ -53,6 +53,6 @@ Use `--no-default-features` for routine test runs. Tests use `DeterministicEmbed
 
 ## Testing notes
 
-- Integration tests in `tests/` (7 files: api, chunker, config, e2e_ingest, hnsw_regression, hybrid_and_agent, vector_store) use `tempfile::tempdir()`; no fixtures, no external services, no network. Full suite **95 tests** with `--no-default-features` (P1 ops: request-id/metrics/CORS/retry).
+- Integration tests in `tests/` (8 files: api, chunker, config, e2e_ingest, hnsw_regression, hybrid_and_agent, retrieval_hard_eval, vector_store) use `tempfile::tempdir()`; no fixtures, no external services, no network. Full suite **109 tests** with `--no-default-features` (Cycle 10: live/auth/concurrency/fallback metric; P1 ops).
 - Vector dim in tests varies (64/128/256) — construct stores via `VectorStore::new_deterministic(dim)` rather than copying CLI's 512 constant.
 - Rerank unit tests use mocks only (no Cohere network). Citation adversarial suite expects 100% reject on synonym/reorder/fabricated/cross-doc/noise.

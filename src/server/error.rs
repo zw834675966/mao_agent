@@ -40,6 +40,14 @@ impl ApiError {
         Self::new(StatusCode::SERVICE_UNAVAILABLE, msg)
     }
 
+    pub fn unauthorized(msg: impl Into<String>) -> Self {
+        Self::new(StatusCode::UNAUTHORIZED, msg)
+    }
+
+    pub fn too_many_requests(msg: impl Into<String>) -> Self {
+        Self::new(StatusCode::TOO_MANY_REQUESTS, msg)
+    }
+
     pub fn with_details(mut self, details: impl Into<String>) -> Self {
         self.details = Some(details.into());
         self

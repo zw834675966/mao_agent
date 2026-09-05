@@ -3,10 +3,10 @@ use axum::{Json, extract::State, http::StatusCode};
 use crate::server::dto::{HealthResponse, StatsResponse};
 use crate::server::state::AppState;
 
-pub async fn handle_health(State(state): State<AppState>) -> (StatusCode, Json<HealthResponse>) {
+async fn health_body(state: &AppState) -> HealthResponse {
     let stats = state.store.stats().await;
     let index_loaded = stats.total_vectors > 0;
-    let body = HealthResponse {
+    HealthResponse {
         status: if index_loaded {
             "ok".to_string()
         } else {
@@ -18,8 +18,21 @@ pub async fn handle_health(State(state): State<AppState>) -> (StatusCode, Json<H
         total_vectors: stats.total_vectors,
         total_documents: stats.total_documents,
         vector_dimension: stats.vector_dimension,
-    };
-    let code = if index_loaded {
+    }
+}
+
+/// Liveness probe: process is up. Always HTTP 200 (even if index empty).
+pub async fn handle_live(State(state): State<AppState>) -> (StatusCode, Json<HealthResponse>) {
+    let mut body = health_body(&state).await;
+    // Liveness status is always ok at HTTP layer; body still reports index_loaded.
+    body.status = "ok".to_string();
+    (StatusCode::OK, Json(body))
+}
+
+/// Readiness probe (`/health`, `/api/v1/health`): 503 when vector index empty.
+pub async fn handle_health(State(state): State<AppState>) -> (StatusCode, Json<HealthResponse>) {
+    let body = health_body(&state).await;
+    let code = if body.index_loaded {
         StatusCode::OK
     } else {
         StatusCode::SERVICE_UNAVAILABLE

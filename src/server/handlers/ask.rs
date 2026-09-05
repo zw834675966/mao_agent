@@ -68,13 +68,14 @@ async fn handle_ask_inner(
     let (base_url, api_key, model) = resolve_chat_overrides(&state, &req, header_api_key);
     let start = Instant::now();
 
-    let agent = DialecticalAgent::new(
+    let agent = DialecticalAgent::new_with_fallback_counter(
         Arc::clone(&state.store),
         state.tantivy.clone(),
         Some(base_url),
         api_key,
         Some(model),
         state.reranker.clone(),
+        Some(state.metrics.fallback_counter()),
     );
     let answer = agent
         .ask(&req.question, top_k, filter.as_ref())
@@ -100,7 +101,8 @@ pub async fn handle_ask(
     Json(req): Json<AskRequest>,
 ) -> ApiResult<(StatusCode, Json<AskResponse>)> {
     let started = Instant::now();
-    let header_api_key = extract_bearer(&headers);
+    let _permit = state.try_acquire_ask()?;
+    let header_api_key = cohere_key_from_headers(&state, &headers);
     let result = handle_ask_inner(state.clone(), req, header_api_key).await;
     state.metrics.record_ask(started, result.is_err());
     result
@@ -120,6 +122,15 @@ fn extract_bearer(headers: &axum::http::HeaderMap) -> Option<String> {
     }
 }
 
+/// When API auth token is configured, Bearer is reserved for auth — Cohere key comes from body/config only.
+fn cohere_key_from_headers(state: &AppState, headers: &axum::http::HeaderMap) -> Option<String> {
+    if state.api_token.is_some() {
+        None
+    } else {
+        extract_bearer(headers)
+    }
+}
+
 // ── Streaming SSE ────────────────────────────────────────────────────────
 
 pub async fn handle_ask_stream(
@@ -131,7 +142,8 @@ pub async fn handle_ask_stream(
         state.metrics.record_ask(Instant::now(), true);
         return Err(ApiError::bad_request("question must not be empty"));
     }
-    let header_api_key = extract_bearer(&headers);
+    let permit = state.try_acquire_ask()?;
+    let header_api_key = cohere_key_from_headers(&state, &headers);
     let top_k = req.top_k.unwrap_or(3).clamp(1, 10);
     let filter = build_filter(&req);
     let (base_url, api_key, model) = resolve_chat_overrides(&state, &req, header_api_key);
@@ -139,14 +151,16 @@ pub async fn handle_ask_stream(
     let metrics = Arc::clone(&state.metrics);
 
     let stream = async_stream::stream! {
+        let _permit = permit;
         let start = Instant::now();
-        let agent = DialecticalAgent::new(
+        let agent = DialecticalAgent::new_with_fallback_counter(
         Arc::clone(&state.store),
         state.tantivy.clone(),
         Some(base_url),
         api_key,
         Some(model),
         state.reranker.clone(),
+        Some(state.metrics.fallback_counter()),
     );
 
         // 1) Retrieve + generate (reuses DialecticalAgent::ask for now; future: true streaming LLM)

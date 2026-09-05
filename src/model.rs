@@ -298,16 +298,39 @@ impl VectorFilter {
         self
     }
 
-    /// Check if a chunk satisfies this filter.
-    pub fn matches(&self, chunk: &DocumentChunk) -> bool {
-        if let Some(p) = self.period
-            && chunk.period != p
-        {
-            return false;
+    /// Periods allowed by this filter.
+    ///
+    /// If both `period` and `periods` are set, **`periods` wins** (Scout Rule: one source of truth).
+    pub fn effective_periods(&self) -> Option<Vec<HistoricalPeriod>> {
+        if let Some(ref periods) = self.periods {
+            if periods.is_empty() {
+                return None;
+            }
+            return Some(periods.clone());
         }
+        self.period.map(|p| vec![p])
+    }
+
+    pub fn with_periods(mut self, periods: Vec<HistoricalPeriod>) -> Self {
+        self.periods = Some(periods);
+        // Clear singular to avoid dual-field contradiction at construction.
+        self.period = None;
+        self
+    }
+
+    /// Normalize dual `period`/`periods` so only `periods` remains when both were set.
+    pub fn normalize_periods(&mut self) {
         if let Some(ref periods) = self.periods
             && !periods.is_empty()
-            && !periods.contains(&chunk.period)
+        {
+            self.period = None;
+        }
+    }
+
+    /// Check if a chunk satisfies this filter.
+    pub fn matches(&self, chunk: &DocumentChunk) -> bool {
+        if let Some(allowed) = self.effective_periods()
+            && !allowed.contains(&chunk.period)
         {
             return false;
         }
@@ -528,5 +551,53 @@ mod tests {
 
         let filter_non_leap = VectorFilter::new().with_date_range("1936-03-01", "1936-03-31");
         assert!(!filter_non_leap.matches(&chunk_leap));
+    }
+
+    #[test]
+    fn test_periods_prefer_over_singular_period() {
+        let chunk = DocumentChunk {
+            chunk_id: "c1".to_string(),
+            doc_id: "d1".to_string(),
+            doc_title: "t".to_string(),
+            author: "毛泽东".to_string(),
+            period: HistoricalPeriod::WarOfResistance,
+            date: "1938".to_string(),
+            volume: "二卷".to_string(),
+            category: "军事".to_string(),
+            tags: vec![],
+            chunk_index: 0,
+            total_chunks: 1,
+            char_count: 1,
+            raw_text: "x".to_string(),
+            contextualized_text: "x".to_string(),
+            section_path: vec![],
+        };
+        // Singular says Agrarian, periods says WarOfResistance — periods wins.
+        let mut f = VectorFilter::new().with_period(HistoricalPeriod::AgrarianRevolutionaryWar);
+        f.periods = Some(vec![HistoricalPeriod::WarOfResistance]);
+        assert!(
+            f.matches(&chunk),
+            "when both period and periods set, periods must win"
+        );
+        assert_eq!(
+            f.effective_periods(),
+            Some(vec![HistoricalPeriod::WarOfResistance])
+        );
+
+        f.normalize_periods();
+        assert!(f.period.is_none());
+        assert!(f.matches(&chunk));
+    }
+
+    #[test]
+    fn test_with_periods_clears_singular() {
+        let f = VectorFilter::new()
+            .with_period(HistoricalPeriod::Unknown)
+            .with_periods(vec![HistoricalPeriod::WarOfLiberation]);
+        assert!(f.period.is_none());
+        assert_eq!(
+            f.effective_periods(),
+            Some(vec![HistoricalPeriod::WarOfLiberation])
+        );
     }
 }

@@ -43,3 +43,26 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
       - name: Run test suite
         run: cargo test --no-default-features --verbose
+
+  release-build:
+    name: Release build (no-default-features)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: cargo build --release --no-default-features
+        run: cargo build --release --no-default-features
+
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Run cargo audit
+        # Fail on vulnerabilities; ignore unreachable/unfixable advisories via audit.toml if needed.
+        run: cargo audit

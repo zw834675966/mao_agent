@@ -221,12 +221,28 @@ impl FullTextIndex {
         let mut clauses: Vec<(Occur, Box<dyn Query>)> = vec![(Occur::Must, user_query)];
 
         if let Some(f) = filter {
-            if let Some(p) = f.period {
-                let term = Term::from_field_text(self.f_period, p.as_str());
-                clauses.push((
-                    Occur::Must,
-                    Box::new(TermQuery::new(term, IndexRecordOption::Basic)),
-                ));
+            // Prefer `periods` over singular `period` (see VectorFilter::effective_periods).
+            if let Some(allowed) = f.effective_periods() {
+                if allowed.len() == 1 {
+                    let term = Term::from_field_text(self.f_period, allowed[0].as_str());
+                    clauses.push((
+                        Occur::Must,
+                        Box::new(TermQuery::new(term, IndexRecordOption::Basic)),
+                    ));
+                } else {
+                    let period_queries: Vec<(Occur, Box<dyn Query>)> = allowed
+                        .into_iter()
+                        .map(|p| {
+                            let term = Term::from_field_text(self.f_period, p.as_str());
+                            (
+                                Occur::Should,
+                                Box::new(TermQuery::new(term, IndexRecordOption::Basic))
+                                    as Box<dyn Query>,
+                            )
+                        })
+                        .collect();
+                    clauses.push((Occur::Must, Box::new(BooleanQuery::new(period_queries))));
+                }
             }
             if let Some(ref vol) = f.volume {
                 let candidates = generate_volume_candidates(vol);
@@ -452,5 +468,41 @@ mod tests {
             "query 农村 must recall a chunk whose only match is the compound 农村包围城市"
         );
         assert_eq!(results[0].chunk_id, "c_compound");
+    }
+
+    #[test]
+    fn test_bm25_honors_periods_over_singular_period() {
+        let index = FullTextIndex::new_in_ram().unwrap();
+        let c1 = dummy_chunk(
+            "c1",
+            "论持久战",
+            HistoricalPeriod::WarOfResistance,
+            "中日战争是持久战",
+        );
+        let c2 = dummy_chunk(
+            "c2",
+            "矛盾论",
+            HistoricalPeriod::AgrarianRevolutionaryWar,
+            "事物的矛盾法则",
+        );
+        index.insert_batch(&[c1, c2]).unwrap();
+
+        let mut filter =
+            VectorFilter::new().with_period(HistoricalPeriod::AgrarianRevolutionaryWar);
+        filter.periods = Some(vec![HistoricalPeriod::WarOfResistance]);
+        let results = index.search("持久战", 5, Some(&filter)).unwrap();
+        assert_eq!(
+            results.len(),
+            1,
+            "periods must win and match WarOfResistance"
+        );
+        assert_eq!(results[0].chunk.period, HistoricalPeriod::WarOfResistance);
+
+        let multi = VectorFilter::new().with_periods(vec![
+            HistoricalPeriod::WarOfResistance,
+            HistoricalPeriod::AgrarianRevolutionaryWar,
+        ]);
+        let both = index.search("法则 OR 持久战", 5, Some(&multi)).unwrap();
+        assert!(!both.is_empty());
     }
 }

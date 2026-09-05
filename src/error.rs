@@ -43,8 +43,9 @@ pub enum VectorError {
     #[error("Index corrupted or invalid: {0}")]
     IndexCorrupted(String),
 
+    /// Opaque HTTP transport failure (reqwest details are not part of the public API).
     #[error("HTTP request error: {0}")]
-    HttpError(#[from] reqwest::Error),
+    HttpError(String),
 
     #[error("Rerank error: {0}")]
     RerankError(String),

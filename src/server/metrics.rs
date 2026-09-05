@@ -22,6 +22,9 @@ pub struct HttpMetrics {
     pub ask_latency_sum_ms: AtomicU64,
     pub ask_latency_count: AtomicU64,
     pub ask_latency_max_ms: AtomicU64,
+
+    /// Count of LLM online→offline fallback events (Arc so agent can share the counter).
+    pub llm_fallback_total: Arc<AtomicU64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -38,6 +41,7 @@ pub struct RouteMetricsSnapshot {
 pub struct MetricsSnapshot {
     pub search: RouteMetricsSnapshot,
     pub ask: RouteMetricsSnapshot,
+    pub llm_fallback_total: u64,
 }
 
 impl HttpMetrics {
@@ -75,6 +79,14 @@ impl HttpMetrics {
         if is_error {
             self.ask_errors.fetch_add(1, Ordering::Relaxed);
         }
+    }
+
+    pub fn record_llm_fallback(&self) {
+        self.llm_fallback_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn fallback_counter(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.llm_fallback_total)
     }
 
     fn route_snapshot(
@@ -120,6 +132,7 @@ impl HttpMetrics {
                 &self.ask_latency_count,
                 &self.ask_latency_max_ms,
             ),
+            llm_fallback_total: self.llm_fallback_total.load(Ordering::Relaxed),
         }
     }
 
@@ -197,6 +210,13 @@ impl HttpMetrics {
             "mao_ask_latency_ms_max",
             s.ask.latency_max_ms,
         );
+        Self::prom_line(
+            &mut out,
+            "Total LLM online-to-offline fallback events",
+            "counter",
+            "mao_llm_fallback_total",
+            s.llm_fallback_total,
+        );
         out
     }
 
@@ -252,13 +272,16 @@ mod tests {
         m.record_search(t0, false);
         m.record_search(t0, true);
         m.record_ask(t0, false);
+        m.record_llm_fallback();
         let snap = m.snapshot();
         assert_eq!(snap.search.requests, 2);
         assert_eq!(snap.search.errors, 1);
         assert_eq!(snap.ask.requests, 1);
+        assert_eq!(snap.llm_fallback_total, 1);
         let text = m.render_prometheus();
         assert!(text.contains("mao_search_requests_total 2"));
         assert!(text.contains("mao_search_errors_total 1"));
         assert!(text.contains("mao_ask_requests_total 1"));
+        assert!(text.contains("mao_llm_fallback_total 1"));
     }
 }

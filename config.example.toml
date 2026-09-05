@@ -14,3 +14,5 @@ api_key = ""
 #   "http://127.0.0.1:3000",
 #   "http://intranet-app.local",
 # ]
+# api_token = "replace-me"   # or env MAO_API_TOKEN / --api-token
+# max_concurrent_asks = 32   # or env MAO_MAX_CONCURRENT_ASKS

@@ -676,3 +676,143 @@ async fn test_cors_localhost_defaults_documented() {
     assert!(c.contains_origin("http://127.0.0.1:5173"));
     assert!(!c.contains_origin("https://evil.example"));
 }
+
+// ── Cycle 10: live / auth / concurrency ───────────────────────────────────
+
+#[tokio::test]
+async fn test_live_ok_when_health_unavailable() {
+    use axum::body::Body;
+    use axum::http::Request;
+    use mao_agent::server::build_router;
+    use tower::ServiceExt;
+
+    let store = Arc::new(VectorStore::new_deterministic(128));
+    let state = AppState::new(
+        store,
+        None,
+        HybridSearchCoordinator::default(),
+        None,
+        "http://127.0.0.1:9".to_string(),
+        None,
+        "test-model".to_string(),
+    );
+    let app = build_router(state);
+    let live = app
+        .clone()
+        .oneshot(Request::builder().uri("/live").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(live.status(), axum::http::StatusCode::OK);
+    let health = app
+        .oneshot(
+            Request::builder()
+                .uri("/health")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(health.status(), axum::http::StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn test_api_token_requires_bearer() {
+    use axum::body::Body;
+    use axum::http::Request;
+    use mao_agent::server::build_router;
+    use mao_agent::server::metrics::HttpMetrics;
+    use mao_agent::server::state::AppState as S;
+    use tower::ServiceExt;
+
+    let base = test_state().await;
+    let state = S::with_ops(
+        base.store,
+        base.tantivy,
+        HybridSearchCoordinator::default(),
+        None,
+        base.chat_base_url,
+        None,
+        base.chat_model,
+        HttpMetrics::new(),
+        Some("secret-token".into()),
+        32,
+    );
+    let app = build_router(state);
+    let denied = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/search")
+                .header("content-type", "application/json")
+                .body(Body::from(
+                    r#"{"query":"持久战","top_k":5,"mode":"hybrid"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(denied.status(), axum::http::StatusCode::UNAUTHORIZED);
+
+    let allowed = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/search")
+                .header("content-type", "application/json")
+                .header("authorization", "Bearer secret-token")
+                .body(Body::from(
+                    r#"{"query":"持久战","top_k":5,"mode":"hybrid"}"#,
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(allowed.status(), axum::http::StatusCode::OK);
+
+    // Probes stay open without token
+    let live = build_router({
+        let base = test_state().await;
+        S::with_ops(
+            base.store,
+            base.tantivy,
+            HybridSearchCoordinator::default(),
+            None,
+            base.chat_base_url,
+            None,
+            base.chat_model,
+            HttpMetrics::new(),
+            Some("secret-token".into()),
+            32,
+        )
+    })
+    .oneshot(Request::builder().uri("/live").body(Body::empty()).unwrap())
+    .await
+    .unwrap();
+    assert_eq!(live.status(), axum::http::StatusCode::OK);
+}
+
+#[tokio::test]
+async fn test_ask_concurrency_limit_returns_429() {
+    use mao_agent::server::metrics::HttpMetrics;
+    use mao_agent::server::state::AppState as S;
+
+    let base = test_state().await;
+    let state = S::with_ops(
+        base.store,
+        base.tantivy,
+        HybridSearchCoordinator::default(),
+        None,
+        base.chat_base_url,
+        None,
+        base.chat_model,
+        HttpMetrics::new(),
+        None,
+        1,
+    );
+    let permit = state.try_acquire_ask().expect("first slot");
+    let err = state.try_acquire_ask().expect_err("second must 429");
+    assert_eq!(err.status, axum::http::StatusCode::TOO_MANY_REQUESTS);
+    drop(permit);
+    assert!(state.try_acquire_ask().is_ok());
+}
