@@ -34,7 +34,7 @@
 # 检查编译 (使用轻量 hash 嵌入器，无需下载模型)
 cargo check --no-default-features
 
-# 运行完整测试套件 (134 个单元与集成测试，含 Gemini / API / HNSW / Graph / citation adversarial)
+# 运行完整测试套件 (165 个单元与集成测试，含 Gemini / API / HNSW / Graph / MCP / citation adversarial)
 cargo test --no-default-features
 
 # 编译发布版本

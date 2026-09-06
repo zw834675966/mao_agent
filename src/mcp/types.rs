@@ -269,7 +269,7 @@ pub fn query_dialectical_principles_tool() -> McpToolDefinition {
 pub fn verify_historical_citation_tool() -> McpToolDefinition {
     McpToolDefinition {
         name: "verify_historical_citation".to_string(),
-        description: "对历史文献引述、名言名句进行权威原典比对、真伪核实与精确度评分。若未提供对照正文，服务器自动在本地典籍库中按篇名反查原典正文并校验。".to_string(),
+        description: "对历史文献引述、名言名句进行权威原典比对、真伪核实与精确度评分。核验只对照本地典籍库按篇名反查的原典正文；调用方提供的 context_chunks 不作核验依据。篇名不在库中则返回 DocNotFound（置信度 0.0）。".to_string(),
         input_schema: serde_json::json!({
             "type": "object",
             "properties": {
@@ -286,7 +286,7 @@ pub fn verify_historical_citation_tool() -> McpToolDefinition {
                     "items": {
                         "type": "string"
                     },
-                    "description": "可选的核对正文片段。若缺省或为空，服务器将自动从本地典籍库中按篇名反查原典正文并校验"
+                    "description": "兼容字段，服务器忽略其内容。核验始终按 claimed_title 从本地典籍库反查原典正文"
                 },
                 "min_confidence": {
                     "type": "number",

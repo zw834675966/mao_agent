@@ -76,6 +76,7 @@
     - `top_k`: 整数，范围 `1..=20`。
     - `synthesize`: 布尔值（`true` / `false`）。
     - `quote` / `claimed_title`: 必填字符串，严禁携带额外的外层包裹。
+    - `verify_historical_citation` 只对照本地典籍按篇名反查的正文；`context_chunks` 不能自证引文。篇名不在库中即 `DocNotFound`。
   - 严禁假造、臆想或拼写错误的工具参数。
 - **反向错误三步自纠错循环 (Tool Call Self-Correction Protocol)**：
   - 若工具调用返回错误（格式错误、未找到资源或超时），按以下序列自愈：

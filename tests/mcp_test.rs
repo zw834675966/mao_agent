@@ -345,6 +345,69 @@ async fn test_mcp_verify_citation_adversarial_rejection() {
 }
 
 #[tokio::test]
+async fn test_mcp_verify_rejects_self_attested_context_chunks() {
+    let (store, ft, graph, _) = setup_test_context().await;
+    let dispatcher = McpDispatcher::new(store, ft, graph, None);
+
+    let call_req = JsonRpcRequest {
+        jsonrpc: "2.0".to_string(),
+        id: Some(json!(23)),
+        method: "tools/call".to_string(),
+        params: Some(json!({
+            "name": "verify_historical_citation",
+            "arguments": {
+                "quote": "这是调用方塞进对照正文的伪造引言。",
+                "claimed_title": "矛盾论",
+                "context_chunks": ["这是调用方塞进对照正文的伪造引言。"]
+            }
+        })),
+    };
+
+    let resp = dispatcher
+        .handle_request(call_req)
+        .await
+        .expect("response expected");
+    assert!(resp.error.is_none());
+    let result = resp.result.expect("result");
+    let text = result["content"][0]["text"].as_str().unwrap();
+    let parsed: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(parsed["is_valid"], false);
+    assert_eq!(parsed["verdict"], "UnverifiedOrFabricated");
+}
+
+#[tokio::test]
+async fn test_mcp_verify_doc_not_found_ignores_context_chunks() {
+    let (store, ft, graph, _) = setup_test_context().await;
+    let dispatcher = McpDispatcher::new(store, ft, graph, None);
+
+    let call_req = JsonRpcRequest {
+        jsonrpc: "2.0".to_string(),
+        id: Some(json!(24)),
+        method: "tools/call".to_string(),
+        params: Some(json!({
+            "name": "verify_historical_citation",
+            "arguments": {
+                "quote": "天地不仁，以万物为刍狗",
+                "claimed_title": "道德经",
+                "context_chunks": ["天地不仁，以万物为刍狗"]
+            }
+        })),
+    };
+
+    let resp = dispatcher
+        .handle_request(call_req)
+        .await
+        .expect("response expected");
+    assert!(resp.error.is_none());
+    let result = resp.result.expect("result");
+    let text = result["content"][0]["text"].as_str().unwrap();
+    let parsed: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(parsed["is_valid"], false);
+    assert_eq!(parsed["verdict"], "DocNotFound");
+    assert_eq!(parsed["confidence"], 0.0);
+}
+
+#[tokio::test]
 async fn test_mcp_verify_citation_auto_retrieval() {
     let (store, ft, graph, _) = setup_test_context().await;
     let dispatcher = McpDispatcher::new(store, ft, graph, None);
@@ -477,15 +540,82 @@ async fn test_mcp_http_endpoint() {
         .body(Body::from(serde_json::to_vec(&tools_payload).unwrap()))
         .unwrap();
 
-    let resp2 = app.oneshot(req2).await.unwrap();
+    let resp2 = app.clone().oneshot(req2).await.unwrap();
     assert_eq!(resp2.status(), axum::http::StatusCode::OK);
 
     let bytes2 = to_bytes(resp2.into_body(), usize::MAX).await.unwrap();
     let rpc_resp2: JsonRpcResponse = serde_json::from_slice(&bytes2).unwrap();
     assert_eq!(rpc_resp2.id, Some(json!(501)));
-    let tools = rpc_resp2.result.unwrap()["tools"]
+    let tools_mcp = rpc_resp2.result.unwrap()["tools"]
         .as_array()
         .unwrap()
         .clone();
-    assert_eq!(tools.len(), 2);
+    assert_eq!(tools_mcp.len(), 2);
+
+    // tools/list on /api/v1/mcp must return the same 2 tools with identical schemas
+    let req3 = Request::builder()
+        .method("POST")
+        .uri("/api/v1/mcp")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&tools_payload).unwrap()))
+        .unwrap();
+
+    let resp3 = app.clone().oneshot(req3).await.unwrap();
+    assert_eq!(resp3.status(), axum::http::StatusCode::OK);
+
+    let bytes3 = to_bytes(resp3.into_body(), usize::MAX).await.unwrap();
+    let rpc_resp3: JsonRpcResponse = serde_json::from_slice(&bytes3).unwrap();
+    assert_eq!(rpc_resp3.id, Some(json!(501)));
+    let tools_api = rpc_resp3.result.unwrap()["tools"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(tools_api.len(), 2);
+    assert_eq!(tools_api, tools_mcp);
+
+    // Both routes expose exactly the two expected tools
+    let names: Vec<&str> = tools_mcp
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        vec!["query_dialectical_principles", "verify_historical_citation"]
+    );
+
+    // tools/call on /mcp succeeds for query_dialectical_principles (same fixture as stdio test)
+    let call_payload = json!({
+        "jsonrpc": "2.0",
+        "id": 502,
+        "method": "tools/call",
+        "params": {
+            "name": "query_dialectical_principles",
+            "arguments": {
+                "query": "矛盾的法则与转化",
+                "top_k": 3
+            }
+        }
+    });
+
+    let req4 = Request::builder()
+        .method("POST")
+        .uri("/mcp")
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(&call_payload).unwrap()))
+        .unwrap();
+
+    let resp4 = app.oneshot(req4).await.unwrap();
+    assert_eq!(resp4.status(), axum::http::StatusCode::OK);
+
+    let bytes4 = to_bytes(resp4.into_body(), usize::MAX).await.unwrap();
+    let rpc_resp4: JsonRpcResponse = serde_json::from_slice(&bytes4).unwrap();
+    assert_eq!(rpc_resp4.id, Some(json!(502)));
+    assert!(rpc_resp4.error.is_none());
+    let result4 = rpc_resp4.result.unwrap();
+    let text4 = result4["content"][0]["text"].as_str().unwrap();
+    let parsed4: Value = serde_json::from_str(text4).unwrap();
+    assert_eq!(parsed4["query"], "矛盾的法则与转化");
+    let principles4 = parsed4["principles"].as_array().unwrap();
+    assert!(!principles4.is_empty());
+    assert_eq!(principles4[0]["doc_title"], "矛盾论");
 }

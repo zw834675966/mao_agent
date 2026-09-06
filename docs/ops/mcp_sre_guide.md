@@ -70,7 +70,7 @@ All exposed tools are generated with strict JSON Schema Draft 7 conformance to e
 - **Input Parameters**:
   - `quote` (*string, required*): The exact quote or proposition statement to verify.
   - `claimed_title` (*string, required*): The claimed canonical work title (e.g., `《反对本本主义》`, `《矛盾论》`, `《实践论》`).
-  - `context_chunks` (*array of strings, optional*): Explicit text chunks for comparison. If omitted or empty, the server automatically executes a title-indexed reverse lookup against the local corpus.
+  - `context_chunks` (*array of strings, optional, ignored for matching*): Compatibility field. Grounding is always a title lookup against the local corpus. A missing title returns `DocNotFound` (confidence 0.0) even if the caller supplies chunks.
   - `min_confidence` (*number, optional, default: 0.85*): Confidence threshold (0.0 to 1.0).
 - **Output Verdicts**:
   - `ExactMatch`: Character-level authentic match (confidence ≥ 0.999).
@@ -85,7 +85,7 @@ All exposed tools are generated with strict JSON Schema Draft 7 conformance to e
 ### Concurrency Gating
 Dialectical LLM synthesis (`synthesize: true`) is gated by an atomic semaphore (`ask_semaphore`).
 - Default concurrency capacity: `32` (configurable via `--max-concurrent-asks` or `MAO_MAX_CONCURRENT_ASKS`).
-- Search and verification operations are zero-cost local operations and are **never** blocked by LLM inference saturation.
+- Search and verification are **not** gated by that semaphore, so LLM saturation does not queue them. They still take local index latency (vector `RwLock` read + BM25/title scan), not zero milliseconds.
 
 ### Standardized Error Code Matrix
 

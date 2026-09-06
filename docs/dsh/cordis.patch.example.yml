@@ -1,65 +1,51 @@
 # ==============================================================================
-# DeepSeek Harness (DSH) / Cordis MCP Server Configuration Patch
+# DeepSeek Harness (DSH) MCP plugin patch for mao_agent
 # ==============================================================================
 #
-# This file provides production-ready configuration patches to register `mao_agent`
-# as the philosophical reasoning brain and citation verifier in DeepSeek Harness (DSH).
+# Syntax matches @deepseek-ai/dsh-mcp-client (one plugin row = one MCP server).
+# Tools appear as mcp__mao__query_dialectical_principles and
+# mcp__mao__verify_historical_citation.
 #
-# Mounting Options:
-# 1. Stdio Transport (Direct Process Spawning - recommended for local dev)
-# 2. Streamable HTTP Transport (Connects to running daemon - recommended for multi-agent clusters)
+# Apply ONE of the two blocks below to a profile patch, e.g.
+#   ~/.dsh/profiles/<name>/cordis.patch.yml
+# Do not enable both: they share serverName `mao`.
 #
-# How to apply:
-# - Copy the relevant block into your Cordis configuration file (~/.dsh/config.yml or ~/.cordis/config.yml)
-# - Or apply as a patch file using: `dsh config apply docs/dsh/cordis.patch.example.yml`
+# Official field set: transport, serverName, command/args/env (stdio),
+# url/headers (streamable-http). There is no mcpServers: map and no
+# permissions.autoApprove on this plugin.
 # ==============================================================================
 
-# Option 1: Stdio Transport (Direct execution via CLI)
-# Notes:
-# - All tracing/logging is strictly isolated to stderr to ensure zero JSON-RPC framing corruption.
-# - DSH executes the binary directly in offline or hybrid mode.
+# Option 1: Stdio (local child process)
 - insert:
-    path: /mcpServers/mao_agent_stdio
-    value:
-      command: "cargo"
-      args:
-        - "run"
-        - "--release"
-        - "--"
-        - "mcp"
-        - "--offline" # Remove --offline if SiliconFlow/Gemini/Cohere API keys are configured
-      env:
-        RUST_LOG: "warn"
-        SILICONFLOW_API_KEY: "${env:SILICONFLOW_API_KEY}"
-        COHERE_API_KEY: "${env:COHERE_API_KEY}"
-      # DSH Action Gate & Pre-execute Hook Policy:
-      # Both tools are hermetic, read-only philosophical introspection tools.
-      # Auto-approving prevents unnecessary confirmation popups during autonomous loops.
-      permissions:
-        autoApprove:
-          - "query_dialectical_principles"
-          - "verify_historical_citation"
-      metadata:
-        description: "Maoist Dialectical Thinking Engine & Citation Verifier (Stdio)"
-        version: "0.1.0"
+    - id: mcp-mao
+      name: "@deepseek-ai/dsh-mcp-client"
+      config:
+        serverName: mao
+        transport: stdio
+        command: cargo
+        args:
+          - run
+          - --release
+          - --
+          - mcp
+          - --offline
+        env:
+          RUST_LOG: warn
+        failOnStartupError: false
 
-# Option 2: Streamable HTTP Transport (Connect to existing daemon)
-# Notes:
-# - Start daemon first via: `cargo run --release -- serve --port 3210`
-# - Endpoint exposes Google SRE concurrency limits and Prometheus metrics (/metrics)
-- insert:
-    path: /mcpServers/mao_agent_http
-    value:
-      url: "http://127.0.0.1:3210/api/v1/mcp"
-      transport: "streamable-http"
-      headers:
-        # Optional: configure if MAO_API_TOKEN / --api-token is set on the server
-        # Authorization: "Bearer your-secret-token-here"
-        Content-Type: "application/json"
-      permissions:
-        autoApprove:
-          - "query_dialectical_principles"
-          - "verify_historical_citation"
-      metadata:
-        description: "Maoist Dialectical Thinking Engine & Citation Verifier (HTTP)"
-        version: "0.1.0"
+# Option 2: Streamable HTTP (shared daemon)
+# Start first:
+#   cargo run --release -- serve --bind 127.0.0.1:3210
+# JSON POST to /mcp or /api/v1/mcp is valid Streamable HTTP
+# (server MAY return application/json; SSE is optional).
+#
+# - insert:
+#     - id: mcp-mao
+#       name: "@deepseek-ai/dsh-mcp-client"
+#       config:
+#         serverName: mao
+#         transport: streamable-http
+#         url: http://127.0.0.1:3210/api/v1/mcp
+#         headers:
+#           Authorization: !!js '`Bearer ${process.env.MAO_API_TOKEN}`'
+#         failOnStartupError: false
