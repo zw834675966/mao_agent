@@ -42,12 +42,27 @@ impl ChineseSemanticChunker {
             return Vec::new();
         }
 
+        // Hard-split oversized paragraphs first: a single paragraph longer than
+        // `max_chars` would otherwise pass through unsplit (giant chunks blow
+        // past remote embedding input limits, e.g. HTTP 400 from the API).
+        let mut paragraphs: Vec<(Vec<String>, String)> = Vec::with_capacity(raw_paragraphs.len());
+        for (section_path, para) in raw_paragraphs {
+            if para.chars().count() <= self.config.max_chars || self.config.max_chars == 0 {
+                paragraphs.push((section_path, para));
+                continue;
+            }
+            let chars: Vec<char> = para.chars().collect();
+            for piece in chars.chunks(self.config.max_chars) {
+                paragraphs.push((section_path.clone(), piece.iter().collect()));
+            }
+        }
+
         // Build raw chunks
         let mut raw_chunks = Vec::new();
         let mut current_buf = String::new();
         let mut current_section = Vec::new();
 
-        for (section_path, para) in raw_paragraphs {
+        for (section_path, para) in paragraphs {
             let para_len = para.chars().count();
             let section_changed = !current_section.is_empty()
                 && section_path != current_section
@@ -67,7 +82,8 @@ impl ChineseSemanticChunker {
                     raw_chunks.push((current_section.clone(), current_buf.clone()));
                 }
 
-                // Setup overlap from previous text if configured (only if within same section)
+                // Setup overlap from previous text if configured (only if within same section).
+                // The overlap prefix must not push the buffer past max_chars.
                 if !section_changed
                     && self.config.overlap_chars > 0
                     && current_buf.chars().count() > self.config.overlap_chars
@@ -75,7 +91,12 @@ impl ChineseSemanticChunker {
                     let graphemes: Vec<&str> = current_buf.graphemes(true).collect();
                     let overlap_start = graphemes.len().saturating_sub(self.config.overlap_chars);
                     let overlap_str = graphemes[overlap_start..].join("");
-                    current_buf = format!("{}\n\n{}", overlap_str, para);
+                    let candidate = format!("{overlap_str}\n\n{para}");
+                    if candidate.chars().count() <= self.config.max_chars {
+                        current_buf = candidate;
+                    } else {
+                        current_buf = para;
+                    }
                 } else {
                     current_buf = para;
                 }
@@ -258,5 +279,43 @@ mod tests {
                 .contextualized_text
                 .contains("中国革命战争的主要规律是")
         );
+    }
+
+    #[test]
+    fn test_oversized_paragraph_is_hard_split_to_max_chars() {
+        // Regression: a single paragraph longer than max_chars must not pass
+        // through as one giant chunk (it blows past remote embedding input
+        // limits, e.g. SiliconFlow HTTP 400 code 20015).
+        let giant = "分".repeat(2000);
+        let doc = Document {
+            id: "doc_giant".to_string(),
+            metadata: DocumentMetadata {
+                title: "超长段落".to_string(),
+                ..Default::default()
+            },
+            period_enum: HistoricalPeriod::Unknown,
+            headnote: None,
+            content: giant,
+            footnotes: vec![],
+            file_path: None,
+        };
+
+        let chunker = ChineseSemanticChunker::new(ChunkerConfig {
+            max_chars: 600,
+            min_chars: 100,
+            overlap_chars: 50,
+            inject_context_header: true,
+        });
+        let chunks = chunker.chunk_document(&doc);
+
+        assert!(chunks.len() >= 3, "expected splits, got {}", chunks.len());
+        for c in &chunks {
+            assert!(
+                c.raw_text.chars().count() <= 600,
+                "chunk too long: {}",
+                c.raw_text.chars().count()
+            );
+            assert!(c.contextualized_text.contains("【文献】《超长段落》"));
+        }
     }
 }

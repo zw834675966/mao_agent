@@ -235,6 +235,11 @@ impl VectorStore {
         self.index.read().await.chunks_matching(r)
     }
 
+    /// Retrieve all chunks belonging to a document title (with fuzzy title tolerance).
+    pub async fn chunks_matching_title(&self, title: &str) -> Vec<crate::model::DocumentChunk> {
+        self.index.read().await.chunks_matching_title(title)
+    }
+
     /// Compute statistics of the vector store.
     pub async fn stats(&self) -> VectorStoreStats {
         self.index.read().await.compute_stats()

@@ -1,0 +1,179 @@
+{
+  "entities": [
+    {
+      "id": "ent:principal_contradiction",
+      "name": "主要矛盾",
+      "aliases": [
+        "principal contradiction",
+        "矛盾的主要方面"
+      ],
+      "domain": "mao",
+      "source_refs": [
+        {
+          "doc_title": "矛盾论",
+          "section_path": [
+            "主要矛盾和主要的矛盾方面"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ent:secondary_contradictions",
+      "name": "次要矛盾",
+      "aliases": [
+        "secondary contradictions"
+      ],
+      "domain": "mao",
+      "source_refs": [
+        {
+          "doc_title": "矛盾论",
+          "section_path": [
+            "主要矛盾和主要的矛盾方面"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ent:amdahls_serial_fraction",
+      "name": "阿姆达尔定律 (Amdahl's Law)",
+      "aliases": [
+        "Amdahl's Law",
+        "阿姆达尔定律"
+      ],
+      "domain": "engineering",
+      "source_refs": [
+        {
+          "doc_title": "阿姆达尔定律 (Amdahl's Law)",
+          "section_path": [
+            "一"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ent:moores_law",
+      "name": "摩尔定律 (Moore's Law)",
+      "aliases": [
+        "Moore's Law",
+        "摩尔定律"
+      ],
+      "domain": "engineering",
+      "source_refs": [
+        {
+          "doc_title": "摩尔定律 (Moore's Law)",
+          "section_path": [
+            "一"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ent:brooks_law",
+      "name": "布鲁克斯法则 (Brooks' Law)",
+      "aliases": [
+        "Brooks' Law",
+        "布鲁克斯法则"
+      ],
+      "domain": "engineering",
+      "source_refs": [
+        {
+          "doc_title": "布鲁克斯法则 (Brooks' Law)",
+          "section_path": [
+            "一"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ent:conways_law",
+      "name": "康威定律 (Conway's Law)",
+      "aliases": [
+        "Conway's Law",
+        "康威定律"
+      ],
+      "domain": "engineering",
+      "source_refs": [
+        {
+          "doc_title": "康威定律 (Conway's Law)",
+          "section_path": [
+            "一"
+          ]
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "id": "rel:contradiction-amdahl",
+      "source": "ent:principal_contradiction",
+      "target": "ent:amdahls_serial_fraction",
+      "rel_type": "aligned_with",
+      "weight": 1.0,
+      "source_refs": [
+        {
+          "doc_title": "矛盾论"
+        },
+        {
+          "doc_title": "阿姆达尔定律 (Amdahl's Law)"
+        }
+      ]
+    },
+    {
+      "id": "rel:contradiction-moores",
+      "source": "ent:principal_contradiction",
+      "target": "ent:moores_law",
+      "rel_type": "aligned_with",
+      "weight": 1.0,
+      "source_refs": [
+        {
+          "doc_title": "矛盾论"
+        },
+        {
+          "doc_title": "摩尔定律 (Moore's Law)"
+        }
+      ]
+    },
+    {
+      "id": "rel:contradiction-brooks",
+      "source": "ent:principal_contradiction",
+      "target": "ent:brooks_law",
+      "rel_type": "primarily_enables",
+      "weight": 0.9,
+      "source_refs": [
+        {
+          "doc_title": "矛盾论"
+        },
+        {
+          "doc_title": "布鲁克斯法则 (Brooks' Law)"
+        }
+      ]
+    },
+    {
+      "id": "rel:contradiction-conways",
+      "source": "ent:principal_contradiction",
+      "target": "ent:conways_law",
+      "rel_type": "primarily_enables",
+      "weight": 0.9,
+      "source_refs": [
+        {
+          "doc_title": "矛盾论"
+        },
+        {
+          "doc_title": "康威定律 (Conway's Law)"
+        }
+      ]
+    },
+    {
+      "id": "rel:principal-secondary",
+      "source": "ent:principal_contradiction",
+      "target": "ent:secondary_contradictions",
+      "rel_type": "primarily_enables",
+      "weight": 0.9,
+      "source_refs": [
+        {
+          "doc_title": "矛盾论"
+        }
+      ]
+    }
+  ]
+}

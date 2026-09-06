@@ -1,9 +1,29 @@
 # Copy to config.toml (gitignored) and fill in the key.
 # Do not commit config.toml.
 
+# Cohere is optional (chat / rerank-v3.5 only). Leave empty to skip rerank
+# and use the offline dialectical template for `ask`.
 [cohere]
 api_key = ""
 # base_url = "https://api.cohere.ai/compatibility/v1"
+
+# SiliconFlow production embedding (OpenAI-compatible). Auto-selected when
+# this key is set (wins over Gemini). BAAI/bge-m3 = 1024-dim.
+# Free-tier budget ~2000 RPM / 500_000 TPM. Bulk ingest:
+#   cargo run -- ingest --embed-provider siliconflow --batch-size 16
+# CLI default --batch-size 32; remote batches are paced 100ms apart to
+# cut HTTP 429. Do not put a live key in this example file.
+[siliconflow]
+api_key = ""
+base_url = "https://api.siliconflow.cn/v1"
+model = "BAAI/bge-m3"
+dimension = 1024
+
+# Google Gemini Embedding (gemini-embedding-2, 768-dim)
+[gemini]
+api_key = ""
+model = "gemini-embedding-2"
+dimension = 768
 
 # Optional CORS allowlist for `serve` (see ADR 0004).
 # If omitted, localhost defaults (ports 3000/5173/8080) are used.

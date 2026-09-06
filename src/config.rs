@@ -8,12 +8,33 @@ pub struct ProjectConfig {
     #[serde(default)]
     pub cohere: CohereConfig,
     #[serde(default)]
+    pub gemini: GeminiConfig,
+    #[serde(default)]
+    pub siliconflow: SiliconFlowConfig,
+    #[serde(default)]
     pub server: ServerConfig,
 }
 
 #[derive(Debug, Default, Deserialize)]
 pub struct CohereConfig {
     pub api_key: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct GeminiConfig {
+    pub api_key: Option<String>,
+    pub model: Option<String>,
+    pub dimension: Option<usize>,
+}
+
+/// SiliconFlow OpenAI-compatible embedding backend (production default).
+/// BAAI/bge-m3 yields 1024-dim dense vectors.
+#[derive(Debug, Default, Deserialize)]
+pub struct SiliconFlowConfig {
+    pub api_key: Option<String>,
+    pub base_url: Option<String>,
+    pub model: Option<String>,
+    pub dimension: Option<usize>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -51,6 +72,34 @@ impl ProjectConfig {
 
     pub fn cohere_api_key(&self) -> Option<&str> {
         nonempty_key(self.cohere.api_key.as_deref())
+    }
+
+    pub fn gemini_api_key(&self) -> Option<&str> {
+        nonempty_key(self.gemini.api_key.as_deref())
+    }
+
+    pub fn gemini_model(&self) -> Option<&str> {
+        nonempty_key(self.gemini.model.as_deref())
+    }
+
+    pub fn gemini_dimension(&self) -> Option<usize> {
+        self.gemini.dimension
+    }
+
+    pub fn siliconflow_api_key(&self) -> Option<&str> {
+        nonempty_key(self.siliconflow.api_key.as_deref())
+    }
+
+    pub fn siliconflow_base_url(&self) -> Option<&str> {
+        nonempty_key(self.siliconflow.base_url.as_deref())
+    }
+
+    pub fn siliconflow_model(&self) -> Option<&str> {
+        nonempty_key(self.siliconflow.model.as_deref())
+    }
+
+    pub fn siliconflow_dimension(&self) -> Option<usize> {
+        self.siliconflow.dimension
     }
 
     pub fn cors_origins(&self) -> Option<&[String]> {

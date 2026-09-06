@@ -67,6 +67,9 @@ pub struct SearchHit {
     pub bm25_score: Option<f32>,
     /// Cohere (or other) rerank relevance score when applied.
     pub rerank_score: Option<f32>,
+    /// Graph expander paths; omitted when absent so existing clients keep the same JSON.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph_paths: Option<Vec<String>>,
     pub chunk: DocumentChunk,
 }
 

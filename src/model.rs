@@ -9,19 +9,19 @@ static YEAR_REGEX: LazyLock<regex::Regex> =
 /// Historical periods representing different eras of modern Chinese history and Mao's writings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 pub enum HistoricalPeriod {
-    /// 早期文稿与建党前 (1893 - 1923)
+    /// Early writings, pre-Party founding ("早期文稿与建党前", 1893-1923).
     EarlyWritings,
-    /// 第一次国内革命战争时期 / 大革命时期 (1924 - 1927)
+    /// First Revolutionary War / Great Revolution ("第一次国内革命战争时期/大革命时期", 1924-1927).
     FirstRevolutionaryWar,
-    /// 土地革命战争时期 / 苏区时期 (1927 - 1937)
+    /// Agrarian Revolutionary War / Soviet-area period ("土地革命战争时期/苏区时期", 1927-1937).
     AgrarianRevolutionaryWar,
-    /// 全民族抗日战争时期 (1937 - 1945)
+    /// War of Resistance Against Japan ("全民族抗日战争时期", 1937-1945).
     WarOfResistance,
-    /// 全国解放战争时期 (1945 - 1949)
+    /// War of Liberation ("全国解放战争时期", 1945-1949).
     WarOfLiberation,
-    /// 社会主义革命与建设时期 (1949 - 1976)
+    /// Socialist revolution and construction ("社会主义革命和建设时期", 1949-1976).
     SocialistConstruction,
-    /// 未知或未分类时期
+    /// Unknown or unclassified period ("未知或未分类时期").
     #[default]
     Unknown,
 }
@@ -334,6 +334,13 @@ impl VectorFilter {
         {
             return false;
         }
+        // Intent: volume/category/tags match bidirectionally
+        // (`stored.contains(query) || query.contains(stored)`) because corpus
+        // granularity varies — e.g. a chunk may record "毛泽东选集第一卷" while
+        // a caller passes "第一卷", or vice versa. Tightening to exact match
+        // would silently drop recall, so the loose rule is deliberate. Pinned by
+        // `test_volume_filter_is_bidirectional_substring` and
+        // `test_category_and_tags_filter_semantics` below.
         if let Some(ref vol) = self.volume
             && !chunk.volume.contains(vol)
             && !vol.contains(&chunk.volume)
@@ -599,5 +606,75 @@ mod tests {
             f.effective_periods(),
             Some(vec![HistoricalPeriod::WarOfLiberation])
         );
+    }
+
+    fn filter_fixture_chunk(volume: &str, category: &str, tags: Vec<String>) -> DocumentChunk {
+        DocumentChunk {
+            chunk_id: "c_filter".to_string(),
+            doc_id: "doc_filter".to_string(),
+            doc_title: "过滤语义夹具".to_string(),
+            author: "毛泽东".to_string(),
+            period: HistoricalPeriod::WarOfResistance,
+            date: "1938-05".to_string(),
+            volume: volume.to_string(),
+            category: category.to_string(),
+            tags,
+            chunk_index: 0,
+            total_chunks: 1,
+            char_count: 8,
+            raw_text: "夹具正文".to_string(),
+            contextualized_text: "夹具正文".to_string(),
+            section_path: vec![],
+        }
+    }
+
+    #[test]
+    fn test_volume_filter_is_bidirectional_substring() {
+        let chunk = filter_fixture_chunk("毛泽东选集第一卷", "军事", vec![]);
+        // Exact hit.
+        assert!(
+            VectorFilter::new()
+                .with_volume("毛泽东选集第一卷")
+                .matches(&chunk)
+        );
+        // Query is a substring of the stored volume.
+        assert!(VectorFilter::new().with_volume("第一卷").matches(&chunk));
+        // Stored volume is a substring of the query.
+        assert!(
+            VectorFilter::new()
+                .with_volume("毛泽东选集第一卷（重排本）")
+                .matches(&chunk)
+        );
+        // Clear miss: neither side contains the other.
+        assert!(
+            !VectorFilter::new()
+                .with_volume("毛泽东选集第二卷")
+                .matches(&chunk)
+        );
+    }
+
+    #[test]
+    fn test_category_and_tags_filter_semantics() {
+        let chunk = filter_fixture_chunk(
+            "选集第二卷",
+            "军事战略",
+            vec!["持久战".to_string(), "抗日战争".to_string()],
+        );
+        // Category query is a substring of the stored category.
+        assert!(VectorFilter::new().with_category("军事").matches(&chunk));
+        // Clear category miss.
+        assert!(!VectorFilter::new().with_category("哲学").matches(&chunk));
+        // Tag query is a substring of a stored tag.
+        let tag_hit = VectorFilter {
+            tags: Some(vec!["持久".to_string()]),
+            ..VectorFilter::default()
+        };
+        assert!(tag_hit.matches(&chunk));
+        // Clear tags miss.
+        let tag_miss = VectorFilter {
+            tags: Some(vec!["战略思想".to_string()]),
+            ..VectorFilter::default()
+        };
+        assert!(!tag_miss.matches(&chunk));
     }
 }

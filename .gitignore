@@ -11,3 +11,8 @@ bad_corpus/
 .pai/
 nul
 logs/
+*.log
+.vscode/
+.workbuddy/
+.santa-reviewer-b-prompt.txt
+corpus_sample15/

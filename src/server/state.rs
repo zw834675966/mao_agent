@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
+use crate::graph::GraphStore;
 use crate::index::{FullTextIndex, HybridSearchCoordinator};
 use crate::rerank::Reranker;
 use crate::server::error::{ApiError, ApiResult};
@@ -28,6 +29,8 @@ pub struct AppState {
     pub api_token: Option<String>,
     /// Limits concurrent ask / ask-stream work.
     pub ask_semaphore: Arc<Semaphore>,
+    /// Optional knowledge graph for hybrid candidate expansion.
+    pub graph: Option<Arc<GraphStore>>,
 }
 
 impl AppState {
@@ -106,7 +109,13 @@ impl AppState {
                 if t.is_empty() { None } else { Some(t) }
             }),
             ask_semaphore: Arc::new(Semaphore::new(limit)),
+            graph: None,
         }
+    }
+
+    pub fn with_graph(mut self, graph: Arc<GraphStore>) -> Self {
+        self.graph = Some(graph);
+        self
     }
 
     /// Try to acquire an ask slot; returns 429 when the limit is exceeded.

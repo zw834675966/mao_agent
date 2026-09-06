@@ -1,0 +1,50 @@
+---
+title: "CAP 定理 / 布鲁尔定理 (CAP Theorem)"
+author: "埃里克·布鲁尔 (Eric Brewer)"
+date: "2000"
+period: "现代软件工程"
+volume: "黑客定律与工程哲学文库"
+category: "分布式系统与一致性定律"
+source: "https://github.com/dwmkerr/hacker-laws"
+tags:
+  - "CAP定理"
+  - "分布式系统"
+  - "一致性"
+  - "可用性"
+  - "分区容错性"
+---
+
+〔CAP定理断言：在分布式网络必然存在网络分区（P）的前提下，任何分布式计算系统都不可能同时保证一致性（C）与可用性（A），必须在二者之间做出权衡。〕
+
+# 一、 定律与原则核心阐述
+
+- [英文维基百科](https://en.wikipedia.org/wiki/CAP_theorem)
+- [中文维基百科](https://zh.wikipedia.org/wiki/CAP%E5%AE%9A%E7%90%86)
+
+CAP 定理由 Eric Brewer 所定义，它指出对于分布式数据存储来说，不可能同时满足以下三点：
+
+- 一致性 (Consistency)：在读取数据时，每个请求都会接收到 _最新的_ 数据，或者返回错误。
+- 可用性 (Availability): 在读取数据时，每个请求都会接收到一个 _非错误的响应_，但不能保证该数据是 _最新的_ 数据。
+- 分区容错性 (Partition Tolerance)：当节点之间任意数量的网络请求失败时，系统能按预期继续运行。
+
+核心论证如下：因为无法保证不会存在网络分区（参见[分布式计算的谬论 (The Fallacies of Distributed Computing)](#分布式计算的谬论-the-fallacies-of-distributed-computing)），所以在分区的情况下，我们可以选择取消当前操作（增加一致性并降低可用性），或者选择继续进行该操作（增加可用性降低一致性）。
+
+该定理的名字来源于一致性 (Consistency)、可用性 (Availability)、分区容错性 (Partition Tolerance) 的首字母。请注意，这与 [_ACID_](#TODO) 没有任何关系，因为其对一致性有另一种定义。最近发展出来的 [PACELC](#TODO) 定理与 CAP 定理相比，增加了对网络 _未_ 分区时（即系统按预期操作时）的延迟和一致性的约束。
+
+大多数的现代数据库平台会通过向数据库用户提供选项的方式，来选择是需要高度可用的操作（比如“脏读 (dirty read)”），还是高度一致的操作(比如“法定确认写写入 (quorum acknowledged write)”)——这间接地承认了这一定理。
+
+现实世界的例子：
+
+- [Inside Google Cloud Spanner and the CAP Theorem](https://cloud.google.com/blog/products/gcp/inside-cloud-spanner-and-the-cap-theorem) - 该文详细介绍了 Cloud Spanner 是如何工作的，表面上该平台似乎能够保证 CAP 三者，但实际上依然是一个 CP 系统，即只有一致性和分区容错性。
+
+参见：
+
+- [ACID](#TODO)
+- [分布式计算的谬论 (The Fallacies of Distributed Computing)](#分布式计算的谬论-the-fallacies-of-distributed-computing)
+- [PACELC](#TODO)
+
+# 二、 原文引文与参考出处
+
+- **原始定义出处**: [dwmkerr/hacker-laws (GitHub)](https://github.com/dwmkerr/hacker-laws)
+- **权威中文文献源**: [nusr/hacker-laws-zh (GitHub)](https://github.com/nusr/hacker-laws-zh)
+- **所属文库分类**: 黑客定律与工程哲学文库 · 分布式系统与一致性定律

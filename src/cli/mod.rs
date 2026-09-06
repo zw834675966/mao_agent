@@ -9,21 +9,35 @@ pub struct EmbedderArgs {
     #[arg(long)]
     pub offline: bool,
 
-    /// OpenAI-compatible embeddings base URL (Cohere: https://api.cohere.ai/compatibility/v1)
+    /// OpenAI-compatible embeddings base URL (SiliconFlow: https://api.siliconflow.cn/v1,
+    /// Cohere: https://api.cohere.ai/compatibility/v1)
     #[arg(long, env = "EMBED_BASE_URL")]
     pub embed_base_url: Option<String>,
 
-    /// Embeddings API key (`EMBED_API_KEY`, `COHERE_API_KEY`, or `config.toml` `[cohere].api_key`). Never commit this value.
+    /// Embeddings API key. SiliconFlow provider chain: `--embed-api-key` →
+    /// `SILICONFLOW_API_KEY` → `EMBED_API_KEY` → `config.toml [siliconflow].api_key`.
+    /// Cohere path additionally honors `COHERE_API_KEY` / `[cohere].api_key`.
+    /// Never commit this value.
     #[arg(long, env = "EMBED_API_KEY")]
     pub embed_api_key: Option<String>,
 
-    /// Remote embeddings model name (Cohere embed-v4.0 is multilingual, 1536-dim)
+    /// Remote embeddings model name (SiliconFlow BAAI/bge-m3 is 1024-dim;
+    /// Cohere embed-v4.0 is 1536-dim)
     #[arg(long, default_value = COHERE_EMBED_MODEL)]
     pub embed_model: String,
 
-    /// Embedding dimension. Omitted: 512 with `--offline` (local BGE); 1536 for remote/Cohere.
+    /// Embedding dimension. Omitted: 512 with `--offline`; 1024 for SiliconFlow;
+    /// 768 for Gemini; 1536 for Cohere.
     #[arg(long)]
     pub embed_dim: Option<usize>,
+
+    /// Embedding provider: siliconflow, gemini, cohere, openai, or local
+    #[arg(long, env = "EMBED_PROVIDER")]
+    pub embed_provider: Option<String>,
+
+    /// Google Gemini API key (`GEMINI_API_KEY` or `config.toml` `[gemini].api_key`). Never commit this value.
+    #[arg(long, env = "GEMINI_API_KEY")]
+    pub gemini_api_key: Option<String>,
 }
 
 #[derive(Parser, Debug)]
@@ -57,7 +71,8 @@ pub struct IngestArgs {
     #[arg(long, default_value = "data/tantivy_index")]
     pub tantivy_dir: PathBuf,
 
-    /// Batch size for embedding and indexing
+    /// Batch size for embedding and indexing. SiliconFlow bulk ingest: 16~32
+    /// (default 32); smaller batches reduce HTTP 429 rate-limit pressure.
     #[arg(short, long, default_value_t = 32)]
     pub batch_size: usize,
 
@@ -114,6 +129,10 @@ pub struct SearchArgs {
     /// Cohere rerank model (default: rerank-v3.5)
     #[arg(long, env = "COHERE_RERANK_MODEL")]
     pub rerank_model: Option<String>,
+
+    /// Optional knowledge-graph snapshot (`ingest-graph` output). Missing file is a no-op.
+    #[arg(long, default_value = "data/graph_store.bin")]
+    pub graph_file: PathBuf,
 
     #[command(flatten)]
     pub embedder: EmbedderArgs,
@@ -180,6 +199,10 @@ pub struct AskArgs {
     #[arg(long, env = "COHERE_RERANK_MODEL")]
     pub rerank_model: Option<String>,
 
+    /// Optional knowledge-graph snapshot. Missing file is a no-op.
+    #[arg(long, default_value = "data/graph_store.bin")]
+    pub graph_file: PathBuf,
+
     #[command(flatten)]
     pub embedder: EmbedderArgs,
 }
@@ -198,6 +221,10 @@ pub struct ServeArgs {
     /// Path to Tantivy full-text index directory
     #[arg(long, default_value = "data/tantivy_index")]
     pub tantivy_dir: PathBuf,
+
+    /// Optional knowledge-graph snapshot. Missing file is a no-op.
+    #[arg(long, default_value = "data/graph_store.bin")]
+    pub graph_file: PathBuf,
 
     /// LLM API base URL (OpenAI compatible)
     #[arg(long, env = "COHERE_BASE_URL", default_value = COHERE_COMPAT_BASE_URL)]
@@ -277,10 +304,25 @@ pub struct EvalRetrievalArgs {
     pub tantivy_dir: PathBuf,
 }
 
+/// Compile JSON graph (`build_knowledge_graph.py`) into a bincode snapshot.
+#[derive(Args, Debug, Clone)]
+pub struct IngestGraphArgs {
+    /// JSON graph from the extractor
+    #[arg(short, long, default_value = "data/graph_store.json")]
+    pub input: PathBuf,
+
+    /// Bincode snapshot written atomically
+    #[arg(short, long, default_value = "data/graph_store.bin")]
+    pub output: PathBuf,
+}
+
 #[derive(Subcommand, Debug)]
 pub enum Commands {
     /// Ingest a corpus directory of Markdown documents into the vector database
     Ingest(IngestArgs),
+
+    /// Compile a JSON knowledge graph into a bincode snapshot
+    IngestGraph(IngestGraphArgs),
 
     /// Search the corpus using Hybrid (Vector + BM25), Vector-only, or BM25-only retrieval
     Search(SearchArgs),
@@ -299,4 +341,46 @@ pub enum Commands {
 
     /// Evaluate retrieval quality (Recall/MRR/NDCG@k) against gold queries
     EvalRetrieval(EvalRetrievalArgs),
+
+    /// Run as a Model Context Protocol (MCP) server over standard I/O (stdio)
+    Mcp(McpArgs),
+}
+
+/// Run as a Model Context Protocol (MCP) server over standard I/O (stdio)
+#[derive(Args, Debug, Clone)]
+pub struct McpArgs {
+    /// Path to vector index snapshot file
+    #[arg(short, long, default_value = "data/vector_store.bin")]
+    pub index_file: PathBuf,
+
+    /// Path to Tantivy full-text index directory
+    #[arg(long, default_value = "data/tantivy_index")]
+    pub tantivy_dir: PathBuf,
+
+    /// Optional knowledge-graph snapshot. Missing file is a no-op.
+    #[arg(long, default_value = "data/graph_store.bin")]
+    pub graph_file: PathBuf,
+
+    /// LLM API base URL (OpenAI compatible)
+    #[arg(long, env = "COHERE_BASE_URL", default_value = COHERE_COMPAT_BASE_URL)]
+    pub base_url: String,
+
+    /// LLM API key (`COHERE_API_KEY` / `config.toml` `[cohere].api_key`)
+    #[arg(long, env = "COHERE_API_KEY")]
+    pub api_key: Option<String>,
+
+    /// Chat model id
+    #[arg(long, default_value = COHERE_CHAT_MODEL)]
+    pub model: String,
+
+    /// Disable Cohere rerank for hybrid search
+    #[arg(long)]
+    pub no_rerank: bool,
+
+    /// Cohere rerank model (default: rerank-v3.5)
+    #[arg(long, env = "COHERE_RERANK_MODEL")]
+    pub rerank_model: Option<String>,
+
+    #[command(flatten)]
+    pub embedder: EmbedderArgs,
 }

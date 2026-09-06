@@ -48,6 +48,8 @@ pub fn build_router_with_cors(state: AppState, cors: CorsAllowlist) -> Router {
             "/api/v1/citation/verify",
             post(handlers::verify::handle_verify),
         )
+        .route("/mcp", post(handlers::mcp::handle_mcp))
+        .route("/api/v1/mcp", post(handlers::mcp::handle_mcp))
         .with_state(state)
         .layer(middleware::from_fn_with_state(
             auth_state,
@@ -125,8 +127,9 @@ pub async fn serve(
     cors: CorsAllowlist,
     api_token: Option<String>,
     max_concurrent_asks: usize,
+    graph: Option<std::sync::Arc<crate::graph::GraphStore>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let state = AppState::with_ops(
+    let mut state = AppState::with_ops(
         store,
         tantivy,
         hybrid,
@@ -138,6 +141,9 @@ pub async fn serve(
         api_token,
         max_concurrent_asks,
     );
+    if let Some(g) = graph {
+        state = state.with_graph(g);
+    }
     let app = build_router_with_cors(state, cors);
     tracing::info!("  GET  /live  /health");
     tracing::info!("  GET  /metrics  /api/v1/metrics");

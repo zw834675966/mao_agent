@@ -41,3 +41,19 @@ fn load_from_path_missing_file_is_error() {
     let msg = err.to_string();
     assert!(msg.contains("no-such-mao-agent-config.toml"), "{msg}");
 }
+
+#[test]
+fn parse_reads_gemini_config() {
+    let cfg = ProjectConfig::parse(
+        r#"
+[gemini]
+api_key = "test-gemini-key"
+model = "gemini-embedding-2"
+dimension = 768
+"#,
+    )
+    .unwrap();
+    assert_eq!(cfg.gemini_api_key(), Some("test-gemini-key"));
+    assert_eq!(cfg.gemini_model(), Some("gemini-embedding-2"));
+    assert_eq!(cfg.gemini_dimension(), Some(768));
+}

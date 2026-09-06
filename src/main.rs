@@ -1,15 +1,13 @@
 use clap::Parser;
 use mao_agent::cli::{
-    AskArgs, Cli, Commands, EmbedderArgs, EvalRetrievalArgs, IngestArgs, InitSamplesArgs,
-    SearchArgs, ServeArgs, StatsArgs,
+    AskArgs, Cli, Commands, EmbedderArgs, EvalRetrievalArgs, IngestArgs, IngestGraphArgs,
+    InitSamplesArgs, McpArgs, SearchArgs, ServeArgs, StatsArgs,
 };
 use mao_agent::config::{ProjectConfig, nonempty_key};
 use mao_agent::corpus::chunker::ChunkerConfig;
 use mao_agent::corpus::ingest::CorpusScanner;
 use mao_agent::model::{HistoricalPeriod, VectorFilter};
-use mao_agent::vector::embedder::{
-    Embedder, EmbedderSelection, resolve_embed_dimension, resolve_embedder,
-};
+use mao_agent::vector::embedder::{Embedder, EmbedderSelection, resolve_embedder};
 use mao_agent::vector::store::VectorStore;
 use std::path::Path;
 use std::sync::Arc;
@@ -28,17 +26,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let subscriber = FmtSubscriber::builder()
         .with_max_level(log_level)
         .with_target(false)
+        .with_writer(std::io::stderr)
         .finish();
     tracing::subscriber::set_global_default(subscriber).ok();
 
     match cli.command {
         Commands::InitSamples(args) => handle_init_samples(&args)?,
         Commands::Ingest(args) => handle_ingest(&args).await?,
+        Commands::IngestGraph(args) => handle_ingest_graph(&args)?,
         Commands::Search(args) => handle_search(&args).await?,
         Commands::Stats(args) => handle_stats(&args).await?,
         Commands::Ask(args) => handle_ask(&args).await?,
         Commands::Serve(args) => handle_serve(&args).await?,
         Commands::EvalRetrieval(args) => handle_eval_retrieval(&args).await?,
+        Commands::Mcp(args) => handle_mcp(&args).await?,
     }
 
     Ok(())
@@ -48,6 +49,56 @@ fn config_cohere_api_key() -> Option<String> {
     ProjectConfig::try_load_default()?
         .cohere_api_key()
         .map(str::to_string)
+}
+
+fn config_gemini_api_key() -> Option<String> {
+    ProjectConfig::try_load_default()?
+        .gemini_api_key()
+        .map(str::to_string)
+}
+
+fn config_gemini_model() -> Option<String> {
+    ProjectConfig::try_load_default()?
+        .gemini_model()
+        .map(str::to_string)
+}
+
+fn config_gemini_dimension() -> Option<usize> {
+    ProjectConfig::try_load_default()?.gemini_dimension()
+}
+
+fn config_siliconflow_api_key() -> Option<String> {
+    ProjectConfig::try_load_default()?
+        .siliconflow_api_key()
+        .map(str::to_string)
+}
+
+fn config_siliconflow_base_url() -> Option<String> {
+    ProjectConfig::try_load_default()?
+        .siliconflow_base_url()
+        .map(str::to_string)
+}
+
+fn config_siliconflow_model() -> Option<String> {
+    ProjectConfig::try_load_default()?
+        .siliconflow_model()
+        .map(str::to_string)
+}
+
+fn config_siliconflow_dimension() -> Option<usize> {
+    ProjectConfig::try_load_default()?.siliconflow_dimension()
+}
+
+fn resolve_gemini_api_key(args: &EmbedderArgs) -> Option<String> {
+    if let Some(key) = nonempty_key(args.gemini_api_key.as_deref()) {
+        return Some(key.to_string());
+    }
+    if let Ok(key) = std::env::var("GEMINI_API_KEY")
+        && let Some(key) = nonempty_key(Some(key.as_str()))
+    {
+        return Some(key.to_string());
+    }
+    config_gemini_api_key()
 }
 
 fn resolve_embed_api_key(args: &EmbedderArgs) -> Option<String> {
@@ -60,6 +111,26 @@ fn resolve_embed_api_key(args: &EmbedderArgs) -> Option<String> {
         return Some(key.to_string());
     }
     config_cohere_api_key()
+}
+
+/// SiliconFlow key chain for `--embed-provider siliconflow`.
+/// Deliberately excludes `COHERE_API_KEY` / `[cohere].api_key` so a stale
+/// Cohere credential can never shadow the production embedding backend.
+fn resolve_siliconflow_api_key(args: &EmbedderArgs) -> Option<String> {
+    if let Some(key) = nonempty_key(args.embed_api_key.as_deref()) {
+        return Some(key.to_string());
+    }
+    if let Ok(key) = std::env::var("SILICONFLOW_API_KEY")
+        && let Some(key) = nonempty_key(Some(key.as_str()))
+    {
+        return Some(key.to_string());
+    }
+    if let Ok(key) = std::env::var("EMBED_API_KEY")
+        && let Some(key) = nonempty_key(Some(key.as_str()))
+    {
+        return Some(key.to_string());
+    }
+    config_siliconflow_api_key()
 }
 
 fn resolve_chat_api_key(cli_key: Option<String>, offline: bool) -> Option<String> {
@@ -110,12 +181,80 @@ fn get_embedder(
     args: &EmbedderArgs,
     cache_path: Option<&Path>,
 ) -> Result<Arc<dyn Embedder>, Box<dyn std::error::Error>> {
+    let gemini_key = resolve_gemini_api_key(args);
+    let siliconflow_key = resolve_siliconflow_api_key(args);
+    // Explicit `--embed-provider` wins; otherwise auto-select by configured key
+    // (SiliconFlow first as the production backend, then Gemini).
+    let provider = args.embed_provider.as_deref().or_else(|| {
+        mao_agent::vector::preferred_embed_provider(siliconflow_key.is_some(), gemini_key.is_some())
+    });
+
+    // Offline never inherits a provider's config dimension: it is LOCAL_EMBEDDING_DIM
+    // unless the user passed `--embed-dim`. Non-offline keeps the config fill-in.
+    let explicit_dim = if args.offline {
+        args.embed_dim
+    } else {
+        args.embed_dim.or_else(|| {
+            if provider == Some("gemini") {
+                config_gemini_dimension()
+            } else if provider == Some("siliconflow") {
+                config_siliconflow_dimension()
+            } else {
+                None
+            }
+        })
+    };
+
+    let model = if provider == Some("gemini") {
+        if args.embed_model != mao_agent::vector::COHERE_EMBED_MODEL {
+            args.embed_model.clone()
+        } else {
+            config_gemini_model()
+                .unwrap_or_else(|| mao_agent::vector::GEMINI_DEFAULT_MODEL.to_string())
+        }
+    } else if provider == Some("siliconflow") {
+        if args.embed_model != mao_agent::vector::COHERE_EMBED_MODEL {
+            args.embed_model.clone()
+        } else {
+            config_siliconflow_model()
+                .unwrap_or_else(|| mao_agent::vector::SILICONFLOW_DEFAULT_MODEL.to_string())
+        }
+    } else {
+        args.embed_model.clone()
+    };
+
+    // SiliconFlow must never fall through to the Cohere default base URL in
+    // `resolve_embedder`: pin base URL explicitly (CLI > config > default).
+    let base_url = if provider == Some("siliconflow") {
+        Some(
+            args.embed_base_url
+                .clone()
+                .filter(|s| !s.trim().is_empty())
+                .or_else(config_siliconflow_base_url)
+                .unwrap_or_else(|| mao_agent::vector::SILICONFLOW_DEFAULT_BASE_URL.to_string()),
+        )
+    } else {
+        args.embed_base_url.clone()
+    };
+
+    let api_key = if provider == Some("siliconflow") {
+        siliconflow_key
+    } else {
+        resolve_embed_api_key(args)
+    };
+
     let selection = EmbedderSelection {
         offline: args.offline,
-        api_key: resolve_embed_api_key(args),
-        base_url: args.embed_base_url.clone(),
-        model: args.embed_model.clone(),
-        dimension: resolve_embed_dimension(args.offline, args.embed_dim),
+        api_key,
+        base_url,
+        model,
+        dimension: mao_agent::vector::resolve_embed_dimension_with_provider(
+            args.offline,
+            provider,
+            explicit_dim,
+        ),
+        provider: provider.map(str::to_string),
+        gemini_api_key: gemini_key,
     };
     Ok(resolve_embedder(&selection, cache_path)?)
 }
@@ -222,6 +361,70 @@ async fn handle_ingest(args: &IngestArgs) -> Result<(), Box<dyn std::error::Erro
     println!("========================================================\n");
 
     Ok(())
+}
+
+fn handle_ingest_graph(args: &IngestGraphArgs) -> Result<(), Box<dyn std::error::Error>> {
+    if !args.input.exists() {
+        eprintln!("❌ 图 JSON 未找到: {}", args.input.display());
+        return Ok(());
+    }
+    if let Some(parent) = args.output.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let store = mao_agent::GraphStore::from_json_file(&args.input)?;
+    store.save_to_file(&args.output)?;
+    println!(
+        "✅ 知识图谱已写入 {} ({} 实体 / {} 边)",
+        args.output.display(),
+        store.entity_count(),
+        store.edge_count()
+    );
+    Ok(())
+}
+
+fn try_load_graph(path: &Path) -> Option<mao_agent::GraphStore> {
+    if !path.exists() {
+        tracing::debug!(path = %path.display(), "graph file missing; dual-only retrieval");
+        eprintln!(
+            "ℹ️ 知识图谱文件缺失 ({}): 仅双路 BM25+Vector 检索 (dual-only)",
+            path.display()
+        );
+        return None;
+    }
+    match mao_agent::GraphStore::load_from_file(path) {
+        Ok(g) => Some(g),
+        Err(e) => {
+            tracing::warn!("failed to load graph {}: {e}", path.display());
+            None
+        }
+    }
+}
+
+async fn expand_hybrid_with_graph(
+    store: &VectorStore,
+    fused: Vec<mao_agent::index::HybridSearchResult>,
+    query: &str,
+    top_k: usize,
+    graph_file: &Path,
+    rerank: bool,
+) -> Vec<mao_agent::index::HybridSearchResult> {
+    let Some(graph) = try_load_graph(graph_file) else {
+        return fused;
+    };
+    let hits = graph.expand(query, 2);
+    let mut resolved = Vec::new();
+    for hit in &hits {
+        for r in &hit.source_refs {
+            for chunk in store.chunks_matching_ref(r).await {
+                resolved.push(mao_agent::ResolvedGraphChunk {
+                    chunk,
+                    paths: hit.paths.clone(),
+                });
+            }
+        }
+    }
+    let final_k = if rerank { None } else { Some(top_k) };
+    mao_agent::union_graph_bonus(fused, &resolved, final_k)
 }
 
 fn print_search_header(args: &SearchArgs) {
@@ -418,6 +621,15 @@ async fn search_hybrid(
         args.rerank_model.clone(),
         args.embedder.embed_api_key.as_deref(),
     );
+    let fused = expand_hybrid_with_graph(
+        &store,
+        fused,
+        &args.query,
+        args.top_k,
+        &args.graph_file,
+        reranker.is_some(),
+    )
+    .await;
     let rerank_start = std::time::Instant::now();
     let hybrid_results =
         mao_agent::rerank_or_fallback(fused, reranker.as_deref(), &args.query, args.top_k).await;
@@ -655,7 +867,7 @@ async fn handle_ask(args: &AskArgs) -> Result<(), Box<dyn std::error::Error>> {
             .as_deref()
             .or(args.embedder.embed_api_key.as_deref()),
     );
-    let agent = mao_agent::agent::DialecticalAgent::new(
+    let mut agent = mao_agent::agent::DialecticalAgent::new(
         store,
         ft_index,
         Some(args.base_url.clone()),
@@ -663,6 +875,9 @@ async fn handle_ask(args: &AskArgs) -> Result<(), Box<dyn std::error::Error>> {
         Some(args.model.clone()),
         reranker,
     );
+    if let Some(graph) = try_load_graph(&args.graph_file) {
+        agent = agent.with_graph(std::sync::Arc::new(graph));
+    }
 
     println!("\n🧠 【Mao Agent 辩证认知推理引擎】");
     println!("❓ 提问: \"{}\"", args.question);
@@ -685,6 +900,55 @@ async fn handle_ask(args: &AskArgs) -> Result<(), Box<dyn std::error::Error>> {
     render_retrieved_chunks(&answer.retrieved_chunks);
     println!("\n⚡ 推演总耗时: {:.2?}", duration);
 
+    Ok(())
+}
+
+async fn handle_mcp(args: &McpArgs) -> Result<(), Box<dyn std::error::Error>> {
+    if !args.index_file.exists() {
+        eprintln!(
+            "❌ 向量索引文件未找到: {}。请先运行 `mao_agent ingest` 构建索引。",
+            args.index_file.display()
+        );
+        std::process::exit(1);
+    }
+
+    let embedder = get_embedder(&args.embedder, Some(&args.index_file))?;
+    let store = match load_store_interactive(&args.index_file, embedder)? {
+        Some(s) => Arc::new(s),
+        None => std::process::exit(1),
+    };
+
+    let tantivy = if args.tantivy_dir.exists() {
+        match mao_agent::index::FullTextIndex::new_in_dir(&args.tantivy_dir) {
+            Ok(idx) => Some(Arc::new(idx)),
+            Err(e) => {
+                tracing::warn!("Failed to load Tantivy index: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    let graph = try_load_graph(&args.graph_file).map(Arc::new);
+
+    let reranker = make_reranker(
+        args.embedder.offline,
+        args.no_rerank,
+        args.rerank_model.clone(),
+        args.api_key
+            .as_deref()
+            .or(args.embedder.embed_api_key.as_deref()),
+    );
+
+    let chat_base_url = args.base_url.clone();
+    let chat_api_key = resolve_chat_api_key(args.api_key.clone(), args.embedder.offline);
+    let chat_model = args.model.clone();
+
+    let dispatcher = mao_agent::mcp::McpDispatcher::new(store, tantivy, graph, reranker)
+        .with_chat_overrides(Some(chat_base_url), chat_api_key, Some(chat_model));
+
+    mao_agent::mcp::run_stdio_server(dispatcher).await?;
     Ok(())
 }
 
@@ -811,6 +1075,7 @@ async fn handle_serve(args: &ServeArgs) -> Result<(), Box<dyn std::error::Error>
         cors,
         api_token,
         max_concurrent_asks,
+        try_load_graph(&args.graph_file).map(std::sync::Arc::new),
     )
     .await?;
     Ok(())

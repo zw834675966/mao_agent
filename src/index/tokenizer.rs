@@ -65,6 +65,16 @@ impl JiebaTokenizer {
             jieba: Arc::new(jieba),
         }
     }
+
+    /// Search-mode cuts for graph entity seeding. Tokens shorter than 2 chars are dropped.
+    pub fn cut_search(&self, text: &str) -> Vec<String> {
+        self.jieba
+            .tokenize(text, TokenizeMode::Search, true)
+            .into_iter()
+            .map(|t| t.word.to_string())
+            .filter(|w| w.chars().count() >= 2)
+            .collect()
+    }
 }
 
 impl Tokenizer for JiebaTokenizer {
@@ -169,5 +179,16 @@ mod tests {
             tokens.iter().any(|t| t == "农村"),
             "search mode must also index the subword 农村 so BM25 can match it: {tokens:?}"
         );
+    }
+
+    #[test]
+    fn cut_search_keeps_domain_term_主要矛盾() {
+        let tokenizer = JiebaTokenizer::new();
+        let tokens = tokenizer.cut_search("主要矛盾与阿姆达尔定律");
+        assert!(
+            tokens.iter().any(|t| t == "主要矛盾"),
+            "cut_search must emit 主要矛盾: {tokens:?}"
+        );
+        assert!(tokens.iter().all(|t| t.chars().count() >= 2));
     }
 }

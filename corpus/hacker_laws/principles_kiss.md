@@ -1,0 +1,38 @@
+---
+title: "KISS 原则 / 保持简单愚蠢 (The KISS Principle)"
+author: "凯利·约翰逊 (Kelly Johnson / 洛克希德臭鼬工厂总工程师)"
+date: "1960"
+period: "现代软件工程"
+volume: "黑客定律与工程哲学文库"
+category: "极简工程设计与可维护性哲学"
+source: "https://github.com/dwmkerr/hacker-laws"
+tags:
+  - "KISS原则"
+  - "保持简单愚蠢"
+  - "极简设计"
+  - "抵制过度抽象"
+  - "可维护性"
+---
+
+〔KISS原则指出：绝大多数系统在保持极简而非变得复杂时才能运转得最好。简单不仅是一种审美，更是系统可靠性、可调试性与长期生存能力的关键保障。〕
+
+# 一、 定律与原则核心阐述
+
+- [英文维基百科](https://en.wikipedia.org/wiki/KISS_principle)
+- [中文维基百科](https://zh.wikipedia.org/wiki/KISS%E5%8E%9F%E5%88%99)
+
+> 保持简单和直白。
+
+KISS 原则指明了如果大多数的系统能够保持简单而非复杂化，那么他们便能够工作在最佳状态。因此，简单性应该是设计时的关键指标，同时也要避免不必要的复杂度。这个短语最初出自 1960 年的美国海军飞机工程师凯利 · 约翰逊 (Kelly Johnson)。
+
+这一原则的最好例证便是约翰逊给设计工程师一些实用工具的故事。那时的他们正面临着一个挑战，即他们参与设计的喷气式飞机必须能够让普通的机械师在战场上仅仅用这些工具进行维修，因此，“直白”这个词应指的是损坏的事物本身和修复用工具的复杂度两者之间的关系，而非工程师们自身的能力水平。
+
+参见：
+
+- [盖尔定律](#%e7%9b%96%e5%b0%94%e5%ae%9a%e5%be%8b-galls-law)
+
+# 二、 原文引文与参考出处
+
+- **原始定义出处**: [dwmkerr/hacker-laws (GitHub)](https://github.com/dwmkerr/hacker-laws)
+- **权威中文文献源**: [nusr/hacker-laws-zh (GitHub)](https://github.com/nusr/hacker-laws-zh)
+- **所属文库分类**: 黑客定律与工程哲学文库 · 极简工程设计与可维护性哲学

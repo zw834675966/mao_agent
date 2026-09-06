@@ -68,7 +68,7 @@ async fn handle_ask_inner(
     let (base_url, api_key, model) = resolve_chat_overrides(&state, &req, header_api_key);
     let start = Instant::now();
 
-    let agent = DialecticalAgent::new_with_fallback_counter(
+    let mut agent = DialecticalAgent::new_with_fallback_counter(
         Arc::clone(&state.store),
         state.tantivy.clone(),
         Some(base_url),
@@ -77,6 +77,9 @@ async fn handle_ask_inner(
         state.reranker.clone(),
         Some(state.metrics.fallback_counter()),
     );
+    if let Some(graph) = state.graph.clone() {
+        agent = agent.with_graph(graph);
+    }
     let answer = agent
         .ask(&req.question, top_k, filter.as_ref())
         .await
@@ -153,7 +156,7 @@ pub async fn handle_ask_stream(
     let stream = async_stream::stream! {
         let _permit = permit;
         let start = Instant::now();
-        let agent = DialecticalAgent::new_with_fallback_counter(
+        let mut agent = DialecticalAgent::new_with_fallback_counter(
         Arc::clone(&state.store),
         state.tantivy.clone(),
         Some(base_url),
@@ -162,6 +165,9 @@ pub async fn handle_ask_stream(
         state.reranker.clone(),
         Some(state.metrics.fallback_counter()),
     );
+        if let Some(graph) = state.graph.clone() {
+            agent = agent.with_graph(graph);
+        }
 
         // 1) Retrieve + generate (reuses DialecticalAgent::ask for now; future: true streaming LLM)
         let answer = match agent.ask(&question, top_k, filter.as_ref()).await {

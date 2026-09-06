@@ -11,13 +11,14 @@
 
 ### 核心特性
 - **双路混合检索 (Hybrid RRF Retrieval)**：
-  - **Dense 向量检索**：高维稠密语义向量检索，支持本地 FastEmbed (ONNX BGE-small-zh-v1.5) 与云端 Cohere `embed-v4.0`；
+  - **Dense 向量检索**：高维稠密语义向量检索，支持 **Google Gemini (`gemini-embedding-2`, 推荐 768 维)**、云端 Cohere `embed-v4.0` (1536 维) 与本地 FastEmbed (ONNX BGE-small-zh-v1.5, 512 维)；
   - **Sparse 全文检索**：基于 Tantivy 0.22 倒排索引与 Jieba 搜索引擎模式分词（`cut_for_search`）；
   - **RRF 排序融合**：倒数排名融合算法（Reciprocal Rank Fusion），自适应合并关键字与语义相关度。
   - **HNSW ANN**：索引达到 5000 向量后自动启用 hnswlib-rs API（经 hnsw-stable 稳定版依赖）近似近邻；快照不持久化图、加载时重建；召回对比请用 `eval-retrieval --force-brute`（该 flag 仅存在于 eval-retrieval，`search` 不支持）。
   - **Cohere Rerank 精排**：hybrid 默认 `fuse(top_k*2) → rerank-v3.5 → top_k`；`--no-rerank` / `COHERE_RERANK_MODEL` 可覆盖，offline 或无 key 自动降级。
-- **历史文献结构化分块与清洗 (Corpus Pipeline)**：
-  - YAML Frontmatter 元数据提取（历史时期、卷册、分类、作者、成文时间）；
+- **多领域文献与工程知识库 (Corpus Pipeline)**：
+  - 覆盖毛泽东经典文献、Hacker Laws（编程法则与原则）、Papers We Love（经典学术论文与原版 PDF）、Awesome Scalability（高可用分布式架构）与 Hello Algo（数据结构与算法）；
+  - 统一 YAML Frontmatter 元数据提取（历史时期、卷册、分类、作者、成文时间、标签）；
   - 针对历史文献排版与 OCR 扫描的 CJK 标点/空格清洗；
   - 层次化语义分块与元数据注入。
 - **辩证认知推演与真子串引文核验 (Dialectical Agent & Verifier)**：
@@ -33,7 +34,7 @@
 # 检查编译 (使用轻量 hash 嵌入器，无需下载模型)
 cargo check --no-default-features
 
-# 运行完整测试套件 (~77 个单元与集成测试，含 API / HNSW / citation adversarial)
+# 运行完整测试套件 (134 个单元与集成测试，含 Gemini / API / HNSW / Graph / citation adversarial)
 cargo test --no-default-features
 
 # 编译发布版本
@@ -45,7 +46,17 @@ cargo build --release
 ```bash
 cp config.example.toml config.toml
 ```
-如需启用云端 Cohere `embed-v4.0` 嵌入与 `command-r7b` 问答模型，请在 `config.toml` 中填入你的 API Key（支持通过 `COHERE_API_KEY` 环境变量或 CLI 参数 `--api-key` 覆盖）。
+生产嵌入走 **硅基流动 SiliconFlow**（`BAAI/bge-m3`，1024 维）。在 `config.toml` 填写（或 `SILICONFLOW_API_KEY`），**不要把真实密钥写进仓库**：
+```toml
+[siliconflow]
+api_key = ""
+base_url = "https://api.siliconflow.cn/v1"
+model = "BAAI/bge-m3"
+dimension = 1024
+```
+批量入库建议 `--batch-size 16~32`（默认 32）。免费额度约 2000 RPM / 500k TPM；远程批次之间 CLI 会间隔 100ms，降低 HTTP 429。
+
+可选：`[gemini]` 做 768 维嵌入；`[cohere]` 仅用于 chat / rerank。无 Cohere key 时 `ask` 走离线四阶段模板。`--embed-provider` 可强制指定。多个 key 同时存在时 **SiliconFlow 优先于 Gemini**。
 
 ---
 
@@ -93,6 +104,9 @@ cargo run -- init-samples
 ingest 与 search/ask **必须使用同一嵌入后端**。混用 `--offline` 与 FastEmbed/Cohere 会因模型或维数不匹配而失败（需重新 ingest）。
 
 ```bash
+# 使用 Google Gemini 向量模型（推荐 768 维，支持自动读取 config.toml 或 GEMINI_API_KEY）
+cargo run -- ingest --corpus-dir corpus --batch-size 32
+
 # 无网 / 无 API key：全程 --offline（确定性 hash，默认 512 维）
 cargo run -- ingest --offline --corpus-dir corpus --batch-size 32
 
@@ -105,6 +119,9 @@ cargo run -- ingest --corpus-dir corpus --batch-size 32
 Hybrid 模式默认在 RRF 融合后调用 Cohere Rerank（`rerank-v3.5`，`POST https://api.cohere.com/v2/rerank`）。有 `COHERE_API_KEY` / `EMBED_API_KEY` / `config.toml [cohere].api_key` 时自动启用；`--offline`、`--no-rerank` 或无 key 时跳过并保留融合顺序。可用 `--rerank-model` / `COHERE_RERANK_MODEL` 覆盖模型。
 
 ```bash
+# 使用 Gemini 向量进行混合检索
+cargo run -- search "墨菲定律与高可用容灾" --top-k 5
+
 # 与上一节 --offline ingest 配对（offline ⇒ 不 rerank）
 cargo run -- search --offline "持久战的三个阶段" --top-k 3
 
@@ -224,11 +241,12 @@ mao_agent/
 │   ├── corpus/                    # 文档解析、CJK清洗与语义分块器
 │   ├── vector/                    # 稠密向量存储、HNSW ANN、Embedding
 │   ├── index/                     # Tantivy 全文倒排索引与 RRF 融合协调器
+│   ├── graph/                     # 知识图谱扩展 (DiGraph、拓扑扩展与候选注入)
 │   ├── rerank/                    # Cohere Rerank trait + client（mock 可测）
 │   ├── eval/                      # Recall / MRR / NDCG@k 检索指标
 │   ├── agent/                     # 辩证认知推演引擎与引文真实性核验器
 │   └── server/                    # Axum HTTP API：DTO/路由/检索·推演SSE·核验 handlers
 ├── evals/retrieval/               # gold queries.jsonl + BASELINE.md
-└── tests/                         # 7 个集成测试套件 (E2E / Store / API / HNSW)
+└── tests/                         # 10 个集成测试套件 (E2E / Store / API / HNSW / Graph)
 ```
 

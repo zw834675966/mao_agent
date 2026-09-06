@@ -13,6 +13,9 @@ pub struct HybridSearchResult {
     /// Cohere (or other) cross-encoder relevance score when rerank was applied.
     #[serde(default)]
     pub rerank_score: Option<f32>,
+    /// Graph expander paths when this chunk was annotated or injected. Absent on dual-only hits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph_paths: Option<Vec<String>>,
     pub rank: usize,
     pub chunk: DocumentChunk,
 }
@@ -95,6 +98,7 @@ impl HybridSearchCoordinator {
                         bm25_score,
                         vector_score,
                         rerank_score: None,
+                        graph_paths: None,
                         rank: rank + 1,
                         chunk,
                     }
@@ -168,5 +172,6 @@ mod tests {
         // Both items scored, ranks fused
         assert!(fused[0].bm25_score.is_some());
         assert!(fused[0].vector_score.is_some());
+        assert!(fused.iter().all(|h| h.graph_paths.is_none()));
     }
 }

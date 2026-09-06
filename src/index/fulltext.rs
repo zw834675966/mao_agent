@@ -7,6 +7,7 @@ use std::path::Path;
 use tantivy::collector::TopDocs;
 use tantivy::query::{AllQuery, BooleanQuery, Occur, Query, QueryParser, RegexQuery, TermQuery};
 use tantivy::schema::*;
+use tantivy::tokenizer::TokenStream;
 use tantivy::{Index, IndexReader, IndexWriter, ReloadPolicy, TantivyDocument, Term};
 use tracing::debug;
 
@@ -199,6 +200,47 @@ impl FullTextIndex {
         Ok(())
     }
 
+    /// Build a Should-union over Jieba tokens for colloquial queries.
+    ///
+    /// Rationale: tantivy's `QueryParser` coerces a whitespace-free multi-term
+    /// leaf into a slop-0 `Phrase` query, forcing a whole colloquial sentence
+    /// (e.g. `主要矛盾与阿姆达尔定律`) to appear consecutively — long CJK
+    /// queries then recall zero even though individual terms exist in the
+    /// index. Pre-tokenizing with the same analyzer used at index time and
+    /// unioning the terms degrades gracefully. Returns `None` when no usable
+    /// token is produced (caller falls back to `QueryParser`, preserving
+    /// legacy behavior for degenerate input). Explicit QueryParser boolean
+    /// syntax (`OR`/`AND`, quotes) is intentionally not honored here: the
+    /// search box takes colloquial text (see README CLI examples). `fuse`
+    /// weights and rerank are untouched.
+    fn should_query_for_colloquial(&self, query_str: &str) -> Option<BooleanQuery> {
+        let mut analyzer = self.index.tokenizers().get(JIEBA_TOKENIZER_NAME)?;
+        let mut stream = analyzer.token_stream(query_str);
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut clauses: Vec<(Occur, Box<dyn Query>)> = Vec::new();
+        stream.process(&mut |token| {
+            let text = token.text.trim().to_string();
+            // Drop single-char noise (mirrors `JiebaTokenizer::cut_search`,
+            // which the graph seeder uses); keeps retrieval/seeding parity.
+            if text.chars().count() < 2 || !seen.insert(text.clone()) {
+                return;
+            }
+            for field in [self.f_title, self.f_body] {
+                clauses.push((
+                    Occur::Should,
+                    Box::new(TermQuery::new(
+                        Term::from_field_text(field, &text),
+                        IndexRecordOption::Basic,
+                    )) as Box<dyn Query>,
+                ));
+            }
+        });
+        if clauses.is_empty() {
+            return None;
+        }
+        Some(BooleanQuery::new(clauses))
+    }
+
     /// Search using BM25 query with optional multi-attribute filters.
     pub fn search(
         &self,
@@ -211,6 +253,8 @@ impl FullTextIndex {
         let query_parser = QueryParser::for_index(&self.index, vec![self.f_title, self.f_body]);
         let user_query = if query_str.trim().is_empty() {
             Box::new(AllQuery) as Box<dyn Query>
+        } else if let Some(should) = self.should_query_for_colloquial(query_str) {
+            Box::new(should) as Box<dyn Query>
         } else {
             query_parser
                 .parse_query(query_str)
@@ -468,6 +512,36 @@ mod tests {
             "query 农村 must recall a chunk whose only match is the compound 农村包围城市"
         );
         assert_eq!(results[0].chunk_id, "c_compound");
+    }
+
+    #[test]
+    fn test_bm25_colloquial_long_sentence_recalls_term_overlap() {
+        let index = FullTextIndex::new_in_ram().unwrap();
+        let mao = dummy_chunk(
+            "c_mao",
+            "矛盾论",
+            HistoricalPeriod::AgrarianRevolutionaryWar,
+            "在复杂事物发展过程中，主要矛盾规定其他矛盾的存在和发展。",
+        );
+        let amdahl = dummy_chunk(
+            "c_amdahl",
+            "阿姆达尔定律 (Amdahl's Law)",
+            HistoricalPeriod::Unknown,
+            "串行比例决定加速比上限，优化应抓住主要瓶颈。",
+        );
+        index.insert_batch(&[mao, amdahl]).unwrap();
+
+        // No whitespace: QueryParser must not coerce this into a slop-0 phrase.
+        let results = index.search("主要矛盾与阿姆达尔定律", 5, None).unwrap();
+        assert!(
+            !results.is_empty(),
+            "colloquial long sentence must recall term overlap, got 0"
+        );
+        assert!(
+            results.iter().any(|r| r.chunk_id == "c_mao"),
+            "expected 矛盾论 via 主要矛盾, got {:?}",
+            results.iter().map(|r| &r.chunk_id).collect::<Vec<_>>()
+        );
     }
 
     #[test]

@@ -33,6 +33,21 @@ impl RetryPolicy {
         }
     }
 
+    /// Production defaults for embedding APIs (OpenAI-compatible + Gemini):
+    /// 5 attempts, 2s → 15s, no jitter. Preserves the hand-rolled backoff
+    /// previously duplicated in both embedders; bulk ingest pacing was tuned
+    /// against it, so it must not share `cohere_http` timing. Transport
+    /// errors are classified by callers (embedders treat them as fatal to
+    /// preserve prior observable behavior).
+    pub fn embeddings_http() -> Self {
+        Self {
+            max_attempts: 5,
+            initial_backoff: Duration::from_millis(2000),
+            max_backoff: Duration::from_secs(15),
+            jitter: false,
+        }
+    }
+
     /// Tiny delays for unit tests (no jitter).
     pub fn fast_test() -> Self {
         Self {
@@ -156,6 +171,29 @@ mod tests {
             .unwrap_err();
         assert_eq!(err, "nope");
         assert_eq!(hits.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn embeddings_http_preserves_legacy_embed_timing() {
+        let policy = RetryPolicy::embeddings_http();
+        assert_eq!(policy.max_attempts, 5);
+        assert_eq!(policy.initial_backoff, Duration::from_millis(2000));
+        assert_eq!(policy.max_backoff, Duration::from_secs(15));
+        assert!(!policy.jitter);
+        assert_eq!(policy.backoff_before_attempt(0), Duration::ZERO);
+        assert_eq!(
+            policy.backoff_before_attempt(1),
+            Duration::from_millis(2000)
+        );
+        assert_eq!(
+            policy.backoff_before_attempt(2),
+            Duration::from_millis(4000)
+        );
+        assert_eq!(
+            policy.backoff_before_attempt(3),
+            Duration::from_millis(8000)
+        );
+        assert_eq!(policy.backoff_before_attempt(4), Duration::from_secs(15));
     }
 
     #[test]

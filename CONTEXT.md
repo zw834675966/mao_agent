@@ -31,7 +31,8 @@ B is **not** multi-tenant SaaS, HA clusters, or public internet hardening.
 **In scope**
 
 - Local or shared-intranet serving of search / ask / verify
-- Offline-capable tests and CLI (`--offline`, deterministic embedder)
+- Offline-capable tests and CLI (`--offline`, deterministic embedder, 512-dim)
+- Production embeddings: SiliconFlow `BAAI/bge-m3` (1024-dim); Cohere optional for chat/rerank only
 - File indexes under `data/` (gitignored artifacts)
 
 **Out of scope / non-goals**
@@ -46,17 +47,20 @@ B is **not** multi-tenant SaaS, HA clusters, or public internet hardening.
 
 ```
 corpus/*.md
-    │ ingest
+    │ ingest                          python scripts/build_knowledge_graph.py --mock
+    ▼                                 │ ingest-graph
+data/vector_store.bin  +  data/tantivy_index/  +  optional data/graph_store.bin
+    │ serve / ask / search --graph-file (missing = dual-only)
     ▼
-data/vector_store.bin  +  data/tantivy_index/
-    │ serve / ask / search
+Hybrid retrieve (BM25 + Vector RRF)
+    │ optional 1–2 hop graph bonus (not a third RRF stream, not --mode graph)
     ▼
-Hybrid retrieve ──► optional Cohere rerank ──► LlmClient
-                                              │
-                                   Online (key) ──fail──► Offline template
-                                              │
-                                              ▼
-                                    CitationVerifier ──► JSON / SSE
+optional Cohere rerank ──► LlmClient
+                         │
+              Online (key) ──fail──► Offline template
+                         │
+                         ▼
+               CitationVerifier ──► JSON / SSE
 ```
 
 ## Related docs

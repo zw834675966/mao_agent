@@ -74,3 +74,10 @@ Live Cohere rerank comparison is still out of scope for this offline baseline (d
 ## Live Cohere hard-set (Cycle 10)
 
 **Cancelled/deferred** for the B-grade offline bar: live Cohere rerank numbers on `queries_hard.jsonl` need an API secret. Revisit when a CI secret is available.
+
+## Cycle 12 addendum (2026-09-06): BM25 colloquial-query fix
+
+- **Mechanism correction:** the old note above said long queries fail from "too many AND terms". Precise cause is tantivy `QueryParser` coercing a whitespace-free multi-term leaf into a **slop-0 `Phrase`** query (`generate_literals_for_str`, tantivy 0.22.1), forcing the whole sentence to appear consecutively. Default operator was never AND (`conjunction_by_default: false` → OR); the phrase coercion happens before operators apply.
+- **Fix (query-side only):** `FullTextIndex::should_query_for_colloquial` (`src/index/fulltext.rs`) pre-tokenizes with the index-time Jieba analyzer and unions terms (`Should`); zero-token input falls back to `QueryParser`. `fuse` weights, rerank, and the eval `「」`-stem path are untouched.
+- **Numbers (same env/flags as above, `--k 5 --no-rerank --offline`, 105 queries):** Hybrid Recall@5 **1.000** / MRR@5 **0.995** / NDCG@5 **0.996** (was 1.000 / 0.984 / 0.988); BM25 leg **1.000 / 0.995 / 0.996** (was 0.781 × 3 — the old leg silently returned empty on long stems whose token positions didn't align). Vector leg unchanged. Gain comes from recovering the ~22% of queries where the BM25 leg was empty, not from weakening the metric.
+- CLI spot check: `search --offline --no-rerank "主要矛盾与阿姆达尔定律"` now shows BM25 scores (9.50/4.56/5.49), Top1《矛盾论》 dual RRF 0.01639; `search --mode bm25` on the same sentence returns candidates instead of 0.

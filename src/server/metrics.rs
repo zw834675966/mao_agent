@@ -23,6 +23,12 @@ pub struct HttpMetrics {
     pub ask_latency_count: AtomicU64,
     pub ask_latency_max_ms: AtomicU64,
 
+    pub mcp_requests: AtomicU64,
+    pub mcp_errors: AtomicU64,
+    pub mcp_latency_sum_ms: AtomicU64,
+    pub mcp_latency_count: AtomicU64,
+    pub mcp_latency_max_ms: AtomicU64,
+
     /// Count of LLM online→offline fallback events (Arc so agent can share the counter).
     pub llm_fallback_total: Arc<AtomicU64>,
 }
@@ -41,6 +47,8 @@ pub struct RouteMetricsSnapshot {
 pub struct MetricsSnapshot {
     pub search: RouteMetricsSnapshot,
     pub ask: RouteMetricsSnapshot,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp: Option<RouteMetricsSnapshot>,
     pub llm_fallback_total: u64,
 }
 
@@ -78,6 +86,17 @@ impl HttpMetrics {
         Self::observe_max(&self.ask_latency_max_ms, ms);
         if is_error {
             self.ask_errors.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    pub fn record_mcp(&self, started: Instant, is_error: bool) {
+        let ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        self.mcp_requests.fetch_add(1, Ordering::Relaxed);
+        self.mcp_latency_sum_ms.fetch_add(ms, Ordering::Relaxed);
+        self.mcp_latency_count.fetch_add(1, Ordering::Relaxed);
+        Self::observe_max(&self.mcp_latency_max_ms, ms);
+        if is_error {
+            self.mcp_errors.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -132,6 +151,13 @@ impl HttpMetrics {
                 &self.ask_latency_count,
                 &self.ask_latency_max_ms,
             ),
+            mcp: Some(Self::route_snapshot(
+                &self.mcp_requests,
+                &self.mcp_errors,
+                &self.mcp_latency_sum_ms,
+                &self.mcp_latency_count,
+                &self.mcp_latency_max_ms,
+            )),
             llm_fallback_total: self.llm_fallback_total.load(Ordering::Relaxed),
         }
     }
@@ -217,6 +243,43 @@ impl HttpMetrics {
             "mao_llm_fallback_total",
             s.llm_fallback_total,
         );
+        if let Some(mcp) = &s.mcp {
+            Self::prom_line(
+                &mut out,
+                "Total /api/v1/mcp requests",
+                "counter",
+                "mao_mcp_requests_total",
+                mcp.requests,
+            );
+            Self::prom_line(
+                &mut out,
+                "Total /api/v1/mcp errors",
+                "counter",
+                "mao_mcp_errors_total",
+                mcp.errors,
+            );
+            Self::prom_line(
+                &mut out,
+                "Sum of /api/v1/mcp latency in milliseconds",
+                "counter",
+                "mao_mcp_latency_ms_sum",
+                mcp.latency_sum_ms,
+            );
+            Self::prom_line(
+                &mut out,
+                "Count of /api/v1/mcp latency samples",
+                "counter",
+                "mao_mcp_latency_ms_count",
+                mcp.latency_count,
+            );
+            Self::prom_line(
+                &mut out,
+                "Max /api/v1/mcp latency in milliseconds",
+                "gauge",
+                "mao_mcp_latency_ms_max",
+                mcp.latency_max_ms,
+            );
+        }
         out
     }
 

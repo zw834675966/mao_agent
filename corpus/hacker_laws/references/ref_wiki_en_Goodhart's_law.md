@@ -1,0 +1,94 @@
+---
+title: "引用文献: Goodhart's law (EN Wikipedia)"
+author: "外部学术与工程文献"
+date: "2024"
+period: "现代软件工程"
+volume: "黑客定律外部引用文献集"
+category: "外部参考文献"
+source: "https://en.wikipedia.org/wiki/Goodhart's_law"
+tags:
+  - "外部参考资料"
+  - "黑客定律文献库"
+  - "维基百科"
+---
+
+〔本文档为黑客定律与工程哲学文库中《英文维基百科》所引用的权威外部文献全文资料，由自动化采集管线持久化留存。〕
+
+# 一、 文献基本信息
+
+- **文献标题**: Goodhart's law (EN Wikipedia)
+- **原文链接**: [https://en.wikipedia.org/wiki/Goodhart's_law](https://en.wikipedia.org/wiki/Goodhart's_law)
+- **引用锚文本**: 英文维基百科
+- **抓取状态**: success
+
+# 二、 文献正文内容
+
+Goodhart's law is an adage that has been stated as, "When a measure becomes a target, it ceases to be a good measure". It is named after British economist Charles Goodhart, who is credited with expressing the core idea of the adage in a 1975 article on monetary policy in the United Kingdom:
+
+Any observed statistical regularity will tend to collapse once pressure is placed upon it for control purposes.
+
+
+== Priority and background ==
+
+Numerous concepts are related to this idea, at least one of which predates Goodhart's statement. Notably, Campbell's law likely has precedence, as Jeff Rodamar has argued, since various formulations date to 1969. Other academics had similar insights at the time. Jerome Ravetz's 1971 book Scientific Knowledge and Its Social Problems also predates Goodhart, though it does not formulate the same law. Ravetz discusses how systems in general can be gamed, focusing on cases where the goals of a task are complex, sophisticated, or subtle. In such cases, the skilled person  executing the tasks properly wants to meet their own goals to the detriment of the assigned tasks. When the goals are instantiated as metrics, this could be seen as equivalent to Goodhart and Campbell's claim.
+Shortly after Goodhart's publication, others suggested closely related ideas, including the Lucas critique (1976). As applied in economics, the law is also implicit in the idea of rational expectations, an economic theory that those aware of a system of rewards and punishments will optimize their actions within that system to achieve their desired results. For example, if an employee is rewarded based on the number of cars sold each month, they will try to sell more cars, even at a loss.
+While it originated in the context of market responses, the law has profound implications for the selection of high-level targets in organizations. Jon Danielsson states the law as
+
+Any statistical relationship will break down when used for policy purposes.
+And suggested a corollary for use in financial risk modelling:
+
+A risk model breaks down when used for regulatory purposes.
+Mario Biagioli related the concept to consequences of using citation impact measures to estimate the importance of scientific publications:
+
+All metrics of scientific evaluation are bound to be abused. Goodhart's law [...] states that when a feature of the economy is picked as an indicator of the economy, then it inexorably ceases to function as that indicator because people start to game it.
+
+
+== Generalization ==
+Later writers generalized Goodhart's point about monetary policy into a more general adage about measures and targets in accounting and evaluation systems. In a book chapter published in 1996, Keith Hoskin wrote:
+
+'Goodhart's Law' – That every measure which becomes a target becomes a bad measure – is inexorably, if ruefully, becoming recognized as one of the overriding laws of our times. Ruefully, for this law of unintended consequences seems so inescapable. But it does so, I suggest, because it is the inevitable corollary of that invention of modernity: accountability.
+In a 1997 paper on the misuse of accountability models in education, anthropologist Marilyn Strathern cited Hoskins expressing Goodhart's Law as "When a measure becomes a target, it ceases to be a good measure", and linked the sentiment to the history of accountability stretching back into Britain in the 1800s:
+
+When a measure becomes a target, it ceases to be a good measure. The more a 2.1 examination performance becomes an expectation, the poorer it becomes as a discriminator of individual performances. Hoskin describes this as 'Goodhart's law', after the latter's observation on monetary control instruments, which led to the invention of other devices for monetary flexibility. However, targets that seem measurable become enticing tools for improvement. The linking of improvement to commensurable increase produced practices of wide application. It was that conflation of 'is' and 'ought', alongside the techniques of quantifiable written assessments, which in Hoskin's view led to the modernist invention of accountability. This was articulated in Britain for the first time around 1800 as 'the awful idea of accountability' (Ref. 3, p. 268).
+
+
+== Examples ==
+The San Francisco Declaration on Research Assessment denounces several problems in science, and as Goodhart's law explains, one of them is that measurement has become a target. The correlation between h-index and scientific awards has decreased since the widespread usage of the h-index.
+The International Union for Conservation of Nature's (IUCN) measure of extinction can be used to remove environmental protections, which resulted in IUCN becoming more conservative in labeling something as extinct.
+In healthcare, the misapplication of metrics can lead to adverse outcomes. For instance, hospitals striving to reduce length of stay (LOS) may inadvertently discharge patients prematurely, leading to increased emergency readmissions.
+According to Tom and David Chivers in How to Read Numbers, the law applied to the British government response to the COVID-19 pandemic when it announced a target of 100,000 COVID-19 tests per day—initially a target for tests actually carried out and later for maximum capacity of test-taking. The number of useful diagnostic tests was far lower than the government-reported number when it announced it had met the target.
+It was used to criticize the British Thatcher government for trying to conduct monetary policy based on targets for broad and narrow money, but the law reflects a much more general phenomenon.
+The No Child Left Behind Act passed by the United States Congress often led to teachers forcing students through grades before they were ready, to ensure funding for their school for the foreseeable future.
+
+
+== See also ==
+Campbell's law – "The more any quantitative social indicator is used for social decision-making, the more subject it will be to corruption pressures"
+Cobra effect – when incentives designed to solve a problem end up rewarding people for making it worse
+Confirmation bias – the tendency to search for and recall information that confirms or supports one's prior beliefs
+Gaming the system – manipulating rules and procedures to obtain a desired outcome
+Lucas critique – the observation that it is naive to try to predict the effects of a change in economic policy entirely based on relationships observed in historical data
+Map–territory relation – a type of reification fallacy where a model is confused with the thing being modeled
+McNamara fallacy – ignoring qualitative factors on the basis that they cannot be measured
+Metric fixation – Tendency for decision-makers to place excessively large emphases on selected metrics
+Peter principle – individuals are promoted based on success in their previous roles, and not the role of the new position
+Reification (fallacy) – Fallacy of treating an abstraction as if it were a real thing
+Reflexivity (social theory) – Circular relationships between cause and effect
+Reward hacking – occurs when artificial intelligence optimizes a poorly specified reward without reaching the intended outcome
+Surrogation – in business, when a measure of a construct of interest evolves to replace that construct
+
+
+== References ==
+
+
+== Further reading ==
+Muller, Jerry Z. (2018). The Tyranny of Metrics. Princeton University Press. ISBN 978-0-691-19126-3.
+
+
+== External links ==
+Chrystal, K. Alec; Mizen, Paul D. (12 November 2001). "Goodhart's Law: Its Origins, Meaning and Implications for Monetary Policy" (PDF). Retrieved 3 July 2020.
+Manheim, David (9 June 2016). "Goodhart's Law and Why Measurement is Hard". ribbonfarm. Retrieved 3 July 2020.
+Malone, Kenny; Gonzalez, Sarah; Horowitz-Ghazi, Alexi; Goldmark, Alex (21 November 2018). "The Laws Of The Office". Planet Money (Podcast). NPR. Retrieved 3 July 2020.
+Porlando (2021-03-02). "A New Morality of Attainment (Goodhart's Law)". Unintended Consequences. Retrieved 2025-02-08. History of thinking about Goodhart's Law
+
+---
+_本地归档时间: 2026-09-05 | 来源: https://en.wikipedia.org/wiki/Goodhart's_law_

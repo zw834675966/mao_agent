@@ -26,15 +26,33 @@ pub const DIALECTICAL_SYSTEM_PROMPT: &str = r#"你是由毛泽东思想与经典
 "#;
 
 pub fn build_rag_user_prompt(question: &str, context_chunks: &[String]) -> String {
+    build_rag_user_prompt_with_triples(question, context_chunks, &[])
+}
+
+pub fn build_rag_user_prompt_with_triples(
+    question: &str,
+    context_chunks: &[String],
+    triples: &[String],
+) -> String {
     let context_block = context_chunks.join("\n\n---\n\n");
+    let graph_block = if triples.is_empty() {
+        String::new()
+    } else {
+        let body = triples
+            .iter()
+            .take(16)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("\n\n【图谱关系（仅供推理，不得当作原文引用）】\n{body}\n")
+    };
     format!(
         r#"【检索召回的权威历史文献语料】
-{}
-
+{}{}
 【用户咨询问题】
 {}
 
 请依据上述文献证据，严格按“调查研究 -> 主要矛盾分析 -> 理论综合 -> 指导实践”四阶段进行辩证回答，并在涉及论断处精确标注引用篇目与时期。"#,
-        context_block, question
+        context_block, graph_block, question
     )
 }

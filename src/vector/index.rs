@@ -669,6 +669,32 @@ impl VectorIndex {
         candidate_set.map(|s| s.into_iter().collect())
     }
 
+    /// Find all chunks matching a document title (tolerant of Chinese book quotes 《》 and substring match).
+    pub fn chunks_matching_title(&self, title: &str) -> Vec<crate::model::DocumentChunk> {
+        let clean = title
+            .trim()
+            .trim_start_matches('《')
+            .trim_end_matches('》')
+            .trim();
+        if clean.is_empty() {
+            return Vec::new();
+        }
+        self.entries
+            .iter()
+            .filter(|e| {
+                let doc_clean = e
+                    .chunk
+                    .doc_title
+                    .trim()
+                    .trim_start_matches('《')
+                    .trim_end_matches('》')
+                    .trim();
+                doc_clean == clean || doc_clean.contains(clean) || clean.contains(doc_clean)
+            })
+            .map(|e| e.chunk.clone())
+            .collect()
+    }
+
     /// Resolve graph `source_refs` to chunks. Prefer `doc_id`; else title match.
     /// `section_path` is a prefix filter; if it yields nothing, fall back to title-only.
     pub fn chunks_matching(&self, r: &crate::graph::SourceRef) -> Vec<crate::model::DocumentChunk> {

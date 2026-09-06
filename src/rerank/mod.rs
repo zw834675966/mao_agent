@@ -77,6 +77,7 @@ mod tests {
             bm25_score: None,
             vector_score: None,
             rerank_score: None,
+            graph_paths: None,
             rank,
             chunk: make_chunk(id),
         }

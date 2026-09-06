@@ -1,9 +1,10 @@
 use crate::agent::llm::{FallbackLlmClient, LlmClient};
-use crate::agent::prompt::build_rag_user_prompt;
+use crate::agent::prompt::build_rag_user_prompt_with_triples;
 use crate::agent::verifier::{CitationVerifier, VerificationReport};
 use crate::error::Result;
+use crate::graph::{GraphStore, ResolvedGraphChunk, union_graph_bonus};
 use crate::index::fulltext::FullTextIndex;
-use crate::index::hybrid::HybridSearchCoordinator;
+use crate::index::hybrid::{HybridSearchCoordinator, HybridSearchResult};
 use crate::model::{DocumentChunk, VectorFilter};
 use crate::rerank::{Reranker, rerank_or_fallback};
 use crate::vector::store::VectorStore;
@@ -40,6 +41,7 @@ pub struct DialecticalAgent {
     verifier: CitationVerifier,
     llm: Arc<dyn LlmClient>,
     reranker: Option<Arc<dyn Reranker>>,
+    graph: Option<Arc<GraphStore>>,
 }
 
 impl DialecticalAgent {
@@ -89,7 +91,54 @@ impl DialecticalAgent {
             verifier: CitationVerifier::default(),
             llm,
             reranker,
+            graph: None,
         }
+    }
+
+    pub fn with_graph(mut self, graph: Arc<GraphStore>) -> Self {
+        self.graph = Some(graph);
+        self
+    }
+
+    async fn expand_fused(
+        &self,
+        fused: Vec<HybridSearchResult>,
+        question: &str,
+        top_k: usize,
+    ) -> Vec<HybridSearchResult> {
+        let Some(graph) = self.graph.as_ref() else {
+            return fused;
+        };
+        let hits = graph.expand(question, 2);
+        let mut resolved = Vec::new();
+        for hit in &hits {
+            for r in &hit.source_refs {
+                for chunk in self.store.chunks_matching_ref(r).await {
+                    resolved.push(ResolvedGraphChunk {
+                        chunk,
+                        paths: hit.paths.clone(),
+                    });
+                }
+            }
+        }
+        let final_k = if self.reranker.is_some() {
+            None
+        } else {
+            Some(top_k)
+        };
+        union_graph_bonus(fused, &resolved, final_k)
+    }
+
+    fn graph_triples(&self, question: &str) -> Vec<String> {
+        let Some(graph) = self.graph.as_ref() else {
+            return Vec::new();
+        };
+        graph
+            .expand(question, 2)
+            .into_iter()
+            .flat_map(|h| h.paths)
+            .take(16)
+            .collect()
     }
 
     /// Ask the agent a question using historical corpus grounding and dialectical reasoning.
@@ -118,6 +167,7 @@ impl DialecticalAgent {
             let fused = self
                 .hybrid_coordinator
                 .fuse(vec_results, bm25_results, top_k * 2);
+            let fused = self.expand_fused(fused, question, top_k).await;
             let reranked =
                 rerank_or_fallback(fused, self.reranker.as_deref(), question, top_k).await;
             let applied = reranked.iter().any(|r| r.rerank_score.is_some());
@@ -156,7 +206,8 @@ impl DialecticalAgent {
             .iter()
             .map(|c| c.contextualized_text.clone())
             .collect();
-        let user_prompt = build_rag_user_prompt(question, &context_texts);
+        let triples = self.graph_triples(question);
+        let user_prompt = build_rag_user_prompt_with_triples(question, &context_texts, &triples);
 
         // 3. Generate answer via LLM (online with offline fallback on API error / missing key)
         let raw_answer = self
