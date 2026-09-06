@@ -141,6 +141,42 @@ impl VectorStore {
         Ok(())
     }
 
+    /// Embed a batch of chunks and insert them without maintaining the HNSW
+    /// graph. The caller must rebuild the graph once after all batches.
+    async fn index_chunks_deferred(&self, chunks: Vec<DocumentChunk>) -> Result<()> {
+        if chunks.is_empty() {
+            return Ok(());
+        }
+
+        let texts: Vec<String> = chunks
+            .iter()
+            .map(|c| c.contextualized_text.clone())
+            .collect();
+        let vectors = self.embedder.embed_batch(&texts).await?;
+
+        if vectors.len() != chunks.len() {
+            return Err(VectorError::EmbeddingError(format!(
+                "Batch size mismatch: expected {} vectors, got {}",
+                chunks.len(),
+                vectors.len()
+            )));
+        }
+
+        let entries: Vec<VectorEntry> = chunks
+            .into_iter()
+            .zip(vectors)
+            .map(|(chunk, vector)| VectorEntry {
+                id: chunk.chunk_id.clone(),
+                vector,
+                chunk,
+            })
+            .collect();
+
+        let mut index_guard = self.index.write().await;
+        index_guard.insert_batch_deferred(entries)?;
+        Ok(())
+    }
+
     /// Batch index multiple documents with a specified batch size.
     pub async fn index_documents(&self, docs: &[Document], batch_size: usize) -> Result<usize> {
         let mut all_chunks = Vec::new();
@@ -156,9 +192,19 @@ impl VectorStore {
             docs.len()
         );
 
-        for chunk_batch in all_chunks.chunks(batch_size) {
-            self.index_chunks(chunk_batch.to_vec()).await?;
+        // Insert all batches without per-batch HNSW maintenance, then rebuild
+        // the graph once at the end. This avoids a full graph rebuild on every
+        // batch once the activation threshold is crossed (e.g. 8074 chunks at
+        // batch_size 32 would otherwise trigger up to ~96 full rebuilds).
+        for (batch_index, chunk_batch) in all_chunks.chunks(batch_size).enumerate() {
+            if let Some(delay) = ingest_batch_pace(self.embedder.model_name(), batch_index) {
+                tokio::time::sleep(delay).await;
+            }
+            self.index_chunks_deferred(chunk_batch.to_vec()).await?;
         }
+
+        let mut index_guard = self.index.write().await;
+        index_guard.rebuild_hnsw();
 
         info!(
             "Successfully indexed all {} chunks into vector store",
@@ -179,6 +225,14 @@ impl VectorStore {
             return Ok(0);
         }
         self.index_documents(&docs, batch_size).await
+    }
+
+    /// Resolve a graph source_ref against the loaded index (title / doc_id join).
+    pub async fn chunks_matching_ref(
+        &self,
+        r: &crate::graph::SourceRef,
+    ) -> Vec<crate::model::DocumentChunk> {
+        self.index.read().await.chunks_matching(r)
     }
 
     /// Compute statistics of the vector store.
@@ -259,6 +313,16 @@ impl VectorStore {
     }
 }
 
+/// Pacing delay between remote ingest batches to reduce HTTP 429s.
+/// First batch runs immediately; deterministic offline batches are never
+/// paced; remote batches sleep 100ms before each batch after the first.
+pub fn ingest_batch_pace(model_name: &str, batch_index: usize) -> Option<std::time::Duration> {
+    if batch_index == 0 || model_name.starts_with("deterministic-hash") {
+        return None;
+    }
+    Some(std::time::Duration::from_millis(100))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -337,5 +401,29 @@ mod tests {
         let stats = loaded_store.stats().await;
         assert_eq!(stats.total_vectors, 2);
         assert_eq!(stats.total_documents, 2);
+    }
+
+    #[test]
+    fn test_ingest_batch_pace_first_batch_never_sleeps() {
+        assert_eq!(ingest_batch_pace("BAAI/bge-m3", 0), None);
+        assert_eq!(ingest_batch_pace("deterministic-hash-512", 0), None);
+    }
+
+    #[test]
+    fn test_ingest_batch_pace_deterministic_never_sleeps() {
+        assert_eq!(ingest_batch_pace("deterministic-hash-512", 1), None);
+        assert_eq!(ingest_batch_pace("deterministic-hash-512", 5), None);
+    }
+
+    #[test]
+    fn test_ingest_batch_pace_remote_later_batches_sleep_100ms() {
+        assert_eq!(
+            ingest_batch_pace("BAAI/bge-m3", 1),
+            Some(std::time::Duration::from_millis(100))
+        );
+        assert_eq!(
+            ingest_batch_pace("gemini-embedding-2", 3),
+            Some(std::time::Duration::from_millis(100))
+        );
     }
 }

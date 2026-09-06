@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 /// Switch to ANN when the index reaches this many vectors (production default).
 pub const HNSW_THRESHOLD: usize = 5000;
@@ -232,7 +232,14 @@ impl VectorIndex {
             self.hnsw = None;
             return;
         }
+        let n = self.entries.len();
+        let started = std::time::Instant::now();
         self.hnsw = HnswAnn::build(&self.entries, self.dimension);
+        info!(
+            vectors = n,
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "HNSW graph rebuilt"
+        );
     }
 
     fn maintain_hnsw_after_inserts(&mut self, new_ids: &[String], had_update: bool) {
@@ -323,6 +330,18 @@ impl VectorIndex {
 
     /// Batch insert multiple VectorEntries.
     pub fn insert_batch(&mut self, entries: Vec<VectorEntry>) -> Result<()> {
+        self.insert_batch_inner(entries, true)
+    }
+
+    /// Batch insert without maintaining the HNSW graph per batch. Callers that
+    /// insert many batches in a loop should use this and then call
+    /// [`rebuild_hnsw`](Self::rebuild_hnsw) once after all batches, avoiding a
+    /// full graph rebuild per batch once the threshold is crossed.
+    pub fn insert_batch_deferred(&mut self, entries: Vec<VectorEntry>) -> Result<()> {
+        self.insert_batch_inner(entries, false)
+    }
+
+    fn insert_batch_inner(&mut self, entries: Vec<VectorEntry>, maintain_hnsw: bool) -> Result<()> {
         let mut had_update = false;
         let mut new_ids = Vec::new();
         for mut entry in entries {
@@ -366,7 +385,9 @@ impl VectorIndex {
         if had_update {
             self.rebuild_inverted_indices();
         }
-        self.maintain_hnsw_after_inserts(&new_ids, had_update);
+        if maintain_hnsw {
+            self.maintain_hnsw_after_inserts(&new_ids, had_update);
+        }
         Ok(())
     }
     /// Search the index using a normalized query vector, returning top-k matching results.
@@ -646,6 +667,53 @@ impl VectorIndex {
         }
 
         candidate_set.map(|s| s.into_iter().collect())
+    }
+
+    /// Resolve graph `source_refs` to chunks. Prefer `doc_id`; else title match.
+    /// `section_path` is a prefix filter; if it yields nothing, fall back to title-only.
+    pub fn chunks_matching(&self, r: &crate::graph::SourceRef) -> Vec<crate::model::DocumentChunk> {
+        let with_section = self.chunks_matching_inner(r, true);
+        if with_section.is_empty() && r.section_path.as_ref().is_some_and(|p| !p.is_empty()) {
+            self.chunks_matching_inner(r, false)
+        } else {
+            with_section
+        }
+    }
+
+    fn chunks_matching_inner(
+        &self,
+        r: &crate::graph::SourceRef,
+        use_section: bool,
+    ) -> Vec<crate::model::DocumentChunk> {
+        let section_ok = |path: &[String]| -> bool {
+            if !use_section {
+                return true;
+            }
+            let Some(prefix) = r.section_path.as_deref() else {
+                return true;
+            };
+            if prefix.is_empty() {
+                return true;
+            }
+            path.starts_with(prefix)
+        };
+
+        if let Some(doc_id) = r.doc_id.as_deref()
+            && let Some(idxs) = self.doc_index.get(doc_id)
+        {
+            return idxs
+                .iter()
+                .filter_map(|&i| self.entries.get(i))
+                .filter(|e| section_ok(&e.chunk.section_path))
+                .map(|e| e.chunk.clone())
+                .collect();
+        }
+
+        self.entries
+            .iter()
+            .filter(|e| e.chunk.doc_title == r.doc_title && section_ok(&e.chunk.section_path))
+            .map(|e| e.chunk.clone())
+            .collect()
     }
 
     /// Retrieve an entry by its ID.
