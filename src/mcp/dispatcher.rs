@@ -8,15 +8,15 @@ use std::sync::Arc;
 
 use crate::agent::{CitationVerifier, DialecticalAgent};
 use crate::corpus::Domain;
-use crate::graph::{GraphStore, expand_with_graph};
-use crate::index::{FullTextIndex, HybridSearchCoordinator};
+use crate::graph::GraphStore;
+use crate::index::{FullTextIndex, HybridSearchService};
 use crate::mcp::types::{
     JsonRpcError, JsonRpcRequest, JsonRpcResponse, MCP_PROTOCOL_VERSION, McpCallToolResult,
     McpInitializeResult, McpServerCapabilities, McpServerInfo, McpToolsCapability,
     QueryDialecticalArgs, SERVER_NAME, SERVER_VERSION, VerifyCitationArgs, list_all_tools,
 };
 use crate::model::{HistoricalPeriod, VectorFilter};
-use crate::rerank::{Reranker, rerank_or_fallback};
+use crate::rerank::Reranker;
 use crate::vector::VectorStore;
 
 const MAX_QUERY_CHARS: usize = 4000;
@@ -43,7 +43,7 @@ pub struct McpDispatcher {
     tantivy: Option<Arc<FullTextIndex>>,
     graph: Option<Arc<GraphStore>>,
     reranker: Option<Arc<dyn Reranker>>,
-    hybrid: Arc<HybridSearchCoordinator>,
+    search_service: Arc<HybridSearchService>,
     chat_base_url: Option<String>,
     chat_api_key: Option<String>,
     chat_model: Option<String>,
@@ -56,12 +56,19 @@ impl McpDispatcher {
         graph: Option<Arc<GraphStore>>,
         reranker: Option<Arc<dyn Reranker>>,
     ) -> Self {
+        let search_service = HybridSearchService::new(
+            store.clone(),
+            tantivy.clone(),
+            Default::default(),
+            graph.clone(),
+            reranker.clone(),
+        );
         Self {
             store,
             tantivy,
             graph,
             reranker,
-            hybrid: Arc::new(HybridSearchCoordinator::default()),
+            search_service: Arc::new(search_service),
             chat_base_url: None,
             chat_api_key: None,
             chat_model: None,
@@ -88,7 +95,7 @@ impl McpDispatcher {
             tantivy: state.tantivy.clone(),
             graph: state.graph.clone(),
             reranker: state.reranker.clone(),
-            hybrid: Arc::clone(&state.hybrid),
+            search_service: Arc::clone(&state.search_service),
             chat_base_url: Some(state.chat_base_url.clone()),
             chat_api_key: state.chat_api_key.clone(),
             chat_model: Some(state.chat_model.clone()),
@@ -217,48 +224,13 @@ impl McpDispatcher {
             filter = Some(f);
         }
 
-        // 1. Vector Search
-        let vec_results = self
-            .store
-            .search(&args.query, top_k * 2, filter.as_ref())
+        let final_hits = self
+            .search_service
+            .search_hybrid(&args.query, top_k, filter.as_ref(), false)
             .await
-            .map_err(|e| JsonRpcError::internal_error(format!("Vector search failed: {e}")))?;
+            .map_err(|e| JsonRpcError::internal_error(format!("Hybrid search failed: {e}")))?;
 
-        // 2. BM25 Search
-        let bm25_results = if let Some(ref ft) = self.tantivy {
-            match ft.search(&args.query, top_k * 2, filter.as_ref()) {
-                Ok(res) => res,
-                Err(e) => {
-                    tracing::warn!("BM25 search warning in MCP: {e}");
-                    Vec::new()
-                }
-            }
-        } else {
-            Vec::new()
-        };
-
-        // 3. Hybrid RRF fusion
-        let fused = self.hybrid.fuse(vec_results, bm25_results, top_k * 2);
-
-        // 4. Knowledge graph expansion
-        let fused = expand_with_graph(
-            self.graph.as_deref(),
-            &self.store,
-            fused,
-            &args.query,
-            if self.reranker.is_none() {
-                Some(top_k)
-            } else {
-                None
-            },
-        )
-        .await;
-
-        // 5. Optional Reranking
-        let final_hits =
-            rerank_or_fallback(fused, self.reranker.as_deref(), &args.query, top_k).await;
-
-        // 6. Optional Dialectical Agent Synthesis
+        // Optional Dialectical Agent Synthesis
         let synthesis_report = if args.synthesize == Some(true) {
             let mut agent = DialecticalAgent::new(
                 Arc::clone(&self.store),
