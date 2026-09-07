@@ -925,8 +925,23 @@ async fn handle_mcp(args: &McpArgs) -> Result<(), Box<dyn std::error::Error>> {
     let chat_api_key = resolve_chat_api_key(args.api_key.clone(), args.embedder.offline);
     let chat_model = args.model.clone();
 
+    // Build a reusable DialecticalAgent once so synthesize: true requests
+    // never re-instantiate the agent (or a reqwest::Client) per request.
+    let mut agent = mao_agent::agent::DialecticalAgent::new(
+        Arc::clone(&store),
+        tantivy.clone(),
+        Some(chat_base_url.clone()),
+        chat_api_key.clone(),
+        Some(chat_model.clone()),
+        reranker.clone(),
+    );
+    if let Some(g) = graph.clone() {
+        agent = agent.with_graph(g);
+    }
+
     let dispatcher = mao_agent::mcp::McpDispatcher::new(store, tantivy, graph, reranker)
-        .with_chat_overrides(Some(chat_base_url), chat_api_key, Some(chat_model));
+        .with_chat_overrides(Some(chat_base_url), chat_api_key, Some(chat_model))
+        .with_agent(agent);
 
     mao_agent::mcp::run_stdio_server(dispatcher).await?;
     Ok(())

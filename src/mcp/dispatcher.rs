@@ -7,44 +7,24 @@
 use std::sync::Arc;
 
 use crate::agent::DialecticalAgent;
-use crate::corpus::Domain;
 use crate::graph::GraphStore;
 use crate::index::{FullTextIndex, HybridSearchService};
 use crate::mcp::types::{
     JsonRpcError, JsonRpcRequest, JsonRpcResponse, MCP_PROTOCOL_VERSION, McpCallToolResult,
-    McpInitializeResult, McpServerCapabilities, McpServerInfo, McpToolsCapability,
-    QueryDialecticalArgs, SERVER_NAME, SERVER_VERSION, list_all_tools,
+    McpInitializeResult, McpServerCapabilities, McpServerInfo, McpToolsCapability, SERVER_NAME,
+    SERVER_VERSION, list_all_tools,
 };
-use crate::model::{HistoricalPeriod, VectorFilter};
 use crate::rerank::Reranker;
 use crate::vector::VectorStore;
-
-const MAX_QUERY_CHARS: usize = 4000;
-
-fn reject_if_too_long(
-    label: &str,
-    text: &str,
-    max: usize,
-) -> std::result::Result<(), JsonRpcError> {
-    if text.chars().count() > max {
-        Err(JsonRpcError::invalid_params(format!(
-            "{label} exceeds maximum length of {max} characters"
-        )))
-    } else {
-        Ok(())
-    }
-}
 
 #[derive(Clone)]
 pub struct McpDispatcher {
     store: Arc<VectorStore>,
-    tantivy: Option<Arc<FullTextIndex>>,
-    graph: Option<Arc<GraphStore>>,
-    reranker: Option<Arc<dyn Reranker>>,
     search_service: Arc<HybridSearchService>,
     chat_base_url: Option<String>,
     chat_api_key: Option<String>,
     chat_model: Option<String>,
+    agent: Option<Arc<DialecticalAgent>>,
 }
 
 impl McpDispatcher {
@@ -63,13 +43,11 @@ impl McpDispatcher {
         );
         Self {
             store,
-            tantivy,
-            graph,
-            reranker,
             search_service: Arc::new(search_service),
             chat_base_url: None,
             chat_api_key: None,
             chat_model: None,
+            agent: None,
         }
     }
 
@@ -86,17 +64,23 @@ impl McpDispatcher {
         self
     }
 
+    /// Attach a reusable, already-initialized `DialecticalAgent` so that
+    /// `synthesize: true` requests reuse it instead of re-instantiating per call.
+    #[must_use]
+    pub fn with_agent(mut self, agent: DialecticalAgent) -> Self {
+        self.agent = Some(Arc::new(agent));
+        self
+    }
+
     #[must_use]
     pub fn from_app_state(state: &crate::server::state::AppState) -> Self {
         Self {
             store: Arc::clone(&state.store),
-            tantivy: state.tantivy.clone(),
-            graph: state.graph.clone(),
-            reranker: state.reranker.clone(),
             search_service: Arc::clone(&state.search_service),
             chat_base_url: Some(state.chat_base_url.clone()),
             chat_api_key: state.chat_api_key.clone(),
             chat_model: Some(state.chat_model.clone()),
+            agent: None,
         }
     }
 
@@ -194,91 +178,12 @@ impl McpDispatcher {
         &self,
         args_val: serde_json::Value,
     ) -> std::result::Result<McpCallToolResult, JsonRpcError> {
-        let args: QueryDialecticalArgs = serde_json::from_value(args_val)
-            .map_err(|e| JsonRpcError::invalid_params(format!("Invalid arguments: {e}")))?;
-
-        if args.query.trim().is_empty() {
-            return Err(JsonRpcError::invalid_params("query must not be empty"));
-        }
-        reject_if_too_long("query", &args.query, MAX_QUERY_CHARS)?;
-
-        let top_k = args.top_k.unwrap_or(3).clamp(1, 20);
-
-        let mut filter = None;
-        if args.period.is_some() || args.volume.is_some() || args.domain.is_some() {
-            let mut f = VectorFilter::new();
-            if let Some(ref p) = args.period {
-                f.period = Some(HistoricalPeriod::from_str_or_date(p));
-            }
-            if let Some(ref v) = args.volume {
-                f.volume = Some(v.clone());
-            }
-            if let Some(ref d) = args.domain {
-                match Domain::parse(d) {
-                    Ok(parsed) => f = f.with_domain(parsed),
-                    Err(e) => tracing::warn!("ignoring invalid MCP domain '{d}': {e}"),
-                }
-            }
-            filter = Some(f);
-        }
-
-        let final_hits = self
-            .search_service
-            .search_hybrid(&args.query, top_k, filter.as_ref(), false)
-            .await
-            .map_err(|e| JsonRpcError::internal_error(format!("Hybrid search failed: {e}")))?;
-
-        // Optional Dialectical Agent Synthesis
-        let synthesis_report = if args.synthesize == Some(true) {
-            let mut agent = DialecticalAgent::new(
-                Arc::clone(&self.store),
-                self.tantivy.clone(),
-                self.chat_base_url.clone(),
-                self.chat_api_key.clone(),
-                self.chat_model.clone(),
-                self.reranker.clone(),
-            );
-            if let Some(ref g) = self.graph {
-                agent = agent.with_graph(Arc::clone(g));
-            }
-            match agent.ask(&args.query, top_k, filter.as_ref()).await {
-                Ok(ans) => Some(ans.content),
-                Err(e) => {
-                    tracing::warn!("Dialectical synthesis warning: {e}");
-                    Some(format!("(Synthesis unavailable: {e})"))
-                }
-            }
-        } else {
-            None
-        };
-
-        let structured_hits: Vec<serde_json::Value> = final_hits
-            .into_iter()
-            .map(|h| {
-                serde_json::json!({
-                    "chunk_id": h.chunk_id,
-                    "doc_title": h.chunk.doc_title,
-                    "period": h.chunk.period.as_str(),
-                    "volume": h.chunk.volume,
-                    "section_path": h.chunk.section_path,
-                    "text": h.chunk.raw_text,
-                    "score": h.rerank_score.or(h.vector_score).unwrap_or(h.rrf_score),
-                    "graph_paths": h.graph_paths,
-                })
-            })
-            .collect();
-
-        let output = serde_json::json!({
-            "query": args.query,
-            "hits_count": structured_hits.len(),
-            "principles": structured_hits,
-            "synthesis_report": synthesis_report,
-        });
-
-        let formatted = serde_json::to_string_pretty(&output)
-            .map_err(|e| JsonRpcError::internal_error(e.to_string()))?;
-
-        Ok(McpCallToolResult::text(formatted))
+        crate::mcp::tools::principles::execute_query_dialectical_principles(
+            &self.search_service,
+            self.agent.as_deref(),
+            args_val,
+        )
+        .await
     }
 
     async fn execute_verify_historical_citation(
@@ -292,7 +197,7 @@ impl McpDispatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Document, DocumentMetadata};
+    use crate::model::{Document, DocumentMetadata, HistoricalPeriod};
 
     async fn create_test_dispatcher() -> McpDispatcher {
         let store = Arc::new(VectorStore::new_deterministic(64));
@@ -358,34 +263,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_mcp_query_principles_execution() {
-        let dispatcher = create_test_dispatcher().await;
-        let req = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            id: Some(serde_json::json!(3)),
-            method: "tools/call".to_string(),
-            params: Some(serde_json::json!({
-                "name": "query_dialectical_principles",
-                "arguments": {
-                    "query": "调查研究",
-                    "top_k": 1,
-                    "synthesize": false
-                }
-            })),
-        };
-        let resp = dispatcher
-            .handle_request(req)
-            .await
-            .expect("should return response");
-        assert!(resp.error.is_none());
-        let result = resp.result.expect("result should exist");
-        let content = result["content"].as_array().expect("content array");
-        assert_eq!(content.len(), 1);
-        let text = content[0]["text"].as_str().expect("text");
-        assert!(text.contains("没有调查，就没有发言权"));
-    }
-
-    #[tokio::test]
     async fn test_mcp_unknown_method_returns_32601() {
         let dispatcher = create_test_dispatcher().await;
         let req = JsonRpcRequest {
@@ -400,28 +277,5 @@ mod tests {
             .expect("should return response");
         let err = resp.error.expect("should be error");
         assert_eq!(err.code, -32601);
-    }
-
-    #[tokio::test]
-    async fn test_mcp_query_rejects_oversized_query() {
-        let dispatcher = create_test_dispatcher().await;
-        let req = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            id: Some(serde_json::json!(9)),
-            method: "tools/call".to_string(),
-            params: Some(serde_json::json!({
-                "name": "query_dialectical_principles",
-                "arguments": {
-                    "query": "调".repeat(MAX_QUERY_CHARS + 1)
-                }
-            })),
-        };
-        let resp = dispatcher
-            .handle_request(req)
-            .await
-            .expect("should return response");
-        let err = resp.error.expect("should be error");
-        assert_eq!(err.code, -32602);
-        assert!(err.message.contains("exceeds maximum length"));
     }
 }
