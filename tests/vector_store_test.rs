@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use mao_agent::VectorError;
+use mao_agent::corpus::Domain;
 use mao_agent::model::{
     Document, DocumentChunk, DocumentMetadata, HistoricalPeriod, VectorEntry, VectorFilter,
 };
@@ -49,6 +50,7 @@ fn make_test_chunk(
         date: "1938-05-26".to_string(),
         volume: vol.to_string(),
         category: cat.to_string(),
+        domain: Domain::Any,
         tags: vec!["战略".to_string(), "军事".to_string()],
         chunk_index: 0,
         total_chunks: 1,

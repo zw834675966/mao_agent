@@ -3,6 +3,7 @@ use crate::vector::embedder::Embedder;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -19,6 +20,8 @@ struct EmbedCacheFile {
     dimension: usize,
     entries: HashMap<String, Vec<f32>>,
 }
+
+type EmbedCacheRecord = (String, Vec<f32>);
 
 /// SHA-256 disk cache decorator. Identity (`model_name` / `dimension`) delegates to `inner`.
 pub(crate) struct CachedEmbedder {
@@ -63,19 +66,74 @@ impl CachedEmbedder {
         }
         crate::vector::persist::atomic_replace(path, &encoded)
     }
+
+    fn read_header(path: &Path) -> Option<(String, usize)> {
+        let bytes = std::fs::read(path).ok()?;
+        let mut cursor = Cursor::new(bytes);
+        let file: EmbedCacheFile = bincode::deserialize_from(&mut cursor).ok()?;
+        Some((file.model, file.dimension))
+    }
+
+    fn persist_misses(
+        path: &Path,
+        model: &str,
+        dimension: usize,
+        new_entries: &HashMap<String, Vec<f32>>,
+        full_entries: &HashMap<String, Vec<f32>>,
+    ) -> Result<()> {
+        if let Some(parent) = path.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let header_matches = Self::read_header(path)
+            .map(|(m, d)| m == model && d == dimension)
+            .unwrap_or(false);
+
+        if header_matches {
+            if new_entries.is_empty() {
+                return Ok(());
+            }
+            let mut buf = Vec::new();
+            for (key, vec) in new_entries {
+                let record = (key, vec);
+                bincode::serialize_into(&mut buf, &record)?;
+            }
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)?;
+            file.write_all(&buf)?;
+            Ok(())
+        } else {
+            Self::persist(path, model, dimension, full_entries)
+        }
+    }
 }
 
 fn load_entries(path: &Path, model: &str, dimension: usize) -> HashMap<String, Vec<f32>> {
     let Ok(bytes) = std::fs::read(path) else {
         return HashMap::new();
     };
-    let Ok(file) = bincode::deserialize::<EmbedCacheFile>(&bytes) else {
+    let mut cursor = Cursor::new(bytes.as_slice());
+    let Ok(file) = bincode::deserialize_from::<_, EmbedCacheFile>(&mut cursor) else {
         return HashMap::new();
     };
     if file.model != model || file.dimension != dimension {
         return HashMap::new();
     }
-    file.entries
+    let mut entries = file.entries;
+    let total_len = bytes.len() as u64;
+    while cursor.position() < total_len {
+        match bincode::deserialize_from::<_, EmbedCacheRecord>(&mut cursor) {
+            Ok((key, vec)) => {
+                entries.insert(key, vec);
+            }
+            Err(_) => break,
+        }
+    }
+    entries
 }
 
 fn sha256_hex(text: &str) -> String {
@@ -129,14 +187,18 @@ impl Embedder for CachedEmbedder {
             }
             {
                 let mut cache = self.lock_entries()?;
+                let mut new_entries: HashMap<String, Vec<f32>> = HashMap::new();
                 for (i, vec) in miss_idx.iter().zip(miss_vecs) {
-                    cache.insert(keys[*i].clone(), vec.clone());
+                    let key = keys[*i].clone();
+                    new_entries.insert(key.clone(), vec.clone());
+                    cache.insert(key, vec.clone());
                     results[*i] = Some(vec);
                 }
-                Self::persist(
+                Self::persist_misses(
                     &self.path,
                     self.inner.model_name(),
                     self.inner.dimension(),
+                    &new_entries,
                     &cache,
                 )?;
             }

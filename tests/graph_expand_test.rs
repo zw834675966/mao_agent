@@ -1,3 +1,4 @@
+use mao_agent::corpus::Domain;
 use mao_agent::graph::{ResolvedGraphChunk, union_graph_bonus};
 use mao_agent::index::HybridSearchResult;
 use mao_agent::model::{DocumentChunk, HistoricalPeriod};
@@ -12,6 +13,7 @@ fn chunk(id: &str, title: &str) -> DocumentChunk {
         date: "1937-08".to_string(),
         volume: String::new(),
         category: String::new(),
+        domain: Domain::Any,
         tags: vec![],
         chunk_index: 0,
         total_chunks: 1,

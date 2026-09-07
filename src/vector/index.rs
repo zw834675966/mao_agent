@@ -838,6 +838,7 @@ impl VectorIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::corpus::Domain;
     use crate::model::DocumentChunk;
 
     fn create_dummy_chunk(
@@ -855,6 +856,7 @@ mod tests {
             date: "1938-05".to_string(),
             volume: volume.to_string(),
             category: "军事".to_string(),
+            domain: Domain::Any,
             tags: vec!["战略".to_string()],
             chunk_index: 0,
             total_chunks: 1,

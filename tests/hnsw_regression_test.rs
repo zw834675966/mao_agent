@@ -4,6 +4,7 @@
 //! asserts that HNSW top-5 recall relative to exact brute force stays >= 0.99
 //! (|delta_recall@5| < 0.01).
 
+use mao_agent::corpus::Domain;
 use mao_agent::model::{DocumentChunk, HistoricalPeriod, VectorEntry};
 use mao_agent::vector::index::{
     VectorIndex, reset_hnsw_threshold_for_test, set_hnsw_threshold_for_test,
@@ -25,6 +26,7 @@ fn make_chunk(id: &str) -> DocumentChunk {
         date: "1938".to_string(),
         volume: "第二卷".to_string(),
         category: "军事".to_string(),
+        domain: Domain::Any,
         tags: vec!["synthetic".to_string()],
         chunk_index: 0,
         total_chunks: 1,

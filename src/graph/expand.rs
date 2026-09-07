@@ -1,7 +1,8 @@
 use crate::graph::SourceRef;
-use crate::graph::store::GraphExpandHit;
+use crate::graph::store::{GraphExpandHit, GraphStore};
 use crate::index::HybridSearchResult;
 use crate::model::DocumentChunk;
+use crate::vector::store::VectorStore;
 use std::collections::{HashMap, HashSet};
 
 /// Turn expander hits into unique chunks via a `source_ref` lookup (unresolved refs dropped).
@@ -125,4 +126,156 @@ pub fn union_graph_bonus(
         hit.rank = i + 1;
     }
     merged
+}
+
+/// Unified asynchronous graph expansion for hybrid search results.
+///
+/// If `graph` is `None`, returns `fused` untouched.
+/// Otherwise, expands query up to 2 hops, resolves matching chunks from `store`,
+/// and merges them using `union_graph_bonus` with the specified `final_top_k`.
+pub async fn expand_with_graph(
+    graph: Option<&GraphStore>,
+    store: &VectorStore,
+    fused: Vec<HybridSearchResult>,
+    query: &str,
+    final_top_k: Option<usize>,
+) -> Vec<HybridSearchResult> {
+    let Some(graph) = graph else {
+        return fused;
+    };
+    let hits = graph.expand(query, 2);
+    let mut resolved = Vec::new();
+    for hit in &hits {
+        for r in &hit.source_refs {
+            for chunk in store.chunks_matching_ref(r).await {
+                resolved.push(ResolvedGraphChunk {
+                    chunk,
+                    paths: hit.paths.clone(),
+                });
+            }
+        }
+    }
+    union_graph_bonus(fused, &resolved, final_top_k)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::corpus::Domain;
+    use crate::model::HistoricalPeriod;
+
+    fn dual_hit(id: &str, rrf: f32, rank: usize) -> HybridSearchResult {
+        HybridSearchResult {
+            chunk_id: id.to_string(),
+            rrf_score: rrf,
+            bm25_score: None,
+            vector_score: None,
+            rerank_score: None,
+            graph_paths: None,
+            rank,
+            chunk: DocumentChunk {
+                chunk_id: id.to_string(),
+                doc_id: format!("doc_{id}"),
+                doc_title: id.to_string(),
+                author: "test".into(),
+                period: HistoricalPeriod::Unknown,
+                date: "1937-08".into(),
+                volume: String::new(),
+                category: String::new(),
+                domain: Domain::Any,
+                tags: vec![],
+                chunk_index: 0,
+                total_chunks: 1,
+                char_count: 0,
+                raw_text: id.to_string(),
+                contextualized_text: id.to_string(),
+                section_path: vec![],
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn expand_with_graph_none_returns_fused_unchanged() {
+        let fused = vec![dual_hit("c1", 0.02, 1), dual_hit("c2", 0.01, 2)];
+        let store = VectorStore::new_deterministic(2);
+        let out = expand_with_graph(None, &store, fused.clone(), "矛盾论", Some(5)).await;
+        assert_eq!(out, fused);
+    }
+
+    #[tokio::test]
+    async fn expand_with_graph_some_injects_graph_chunks() {
+        let graph_json = r#"{
+            "entities": [
+                {
+                    "id": "e1",
+                    "name": "主要矛盾",
+                    "aliases": [],
+                    "source_refs": [{"doc_title": "矛盾论"}]
+                },
+                {
+                    "id": "e2",
+                    "name": "阿姆达尔定律 (Amdahl's Law)",
+                    "aliases": [],
+                    "source_refs": [{"doc_title": "阿姆达尔定律 (Amdahl's Law)"}]
+                }
+            ],
+            "relationships": [
+                {
+                    "id": "rel1",
+                    "source": "e1",
+                    "target": "e2",
+                    "rel_type": "aligned_with"
+                }
+            ]
+        }"#;
+        let graph = GraphStore::from_json_str(graph_json).unwrap();
+        let store = VectorStore::new_deterministic(2);
+        let chunk1 = DocumentChunk {
+            chunk_id: "c1".into(),
+            doc_id: "doc1".into(),
+            doc_title: "矛盾论".into(),
+            author: "test".into(),
+            period: HistoricalPeriod::Unknown,
+            date: "1937".into(),
+            volume: String::new(),
+            category: String::new(),
+            domain: Domain::Any,
+            tags: vec![],
+            chunk_index: 0,
+            total_chunks: 1,
+            char_count: 0,
+            raw_text: "矛盾论全文".into(),
+            contextualized_text: "矛盾论全文".into(),
+            section_path: vec![],
+        };
+        let chunk2 = DocumentChunk {
+            chunk_id: "c2".into(),
+            doc_id: "doc2".into(),
+            doc_title: "阿姆达尔定律 (Amdahl's Law)".into(),
+            author: "test".into(),
+            period: HistoricalPeriod::Unknown,
+            date: "1937".into(),
+            volume: String::new(),
+            category: String::new(),
+            domain: Domain::Any,
+            tags: vec![],
+            chunk_index: 0,
+            total_chunks: 1,
+            char_count: 0,
+            raw_text: "阿姆达尔定律".into(),
+            contextualized_text: "阿姆达尔定律".into(),
+            section_path: vec![],
+        };
+        store.index_chunks(vec![chunk1, chunk2]).await.unwrap();
+        let fused = vec![];
+        let result = expand_with_graph(Some(&graph), &store, fused, "主要矛盾", Some(5)).await;
+        assert!(!result.is_empty(), "graph expansion should inject chunks");
+        // The seed "主要矛盾" resolves chunk1; the 1-hop target "次要矛盾" resolves chunk2 with paths.
+        let c2 = result.iter().find(|h| h.chunk_id == "c2");
+        assert!(
+            c2.is_some(),
+            "should inject second-hop chunk with graph_paths"
+        );
+        assert!(c2.unwrap().graph_paths.is_some());
+    }
 }
