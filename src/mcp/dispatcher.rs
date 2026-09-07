@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use crate::agent::{CitationVerifier, DialecticalAgent};
-use crate::graph::{GraphStore, ResolvedGraphChunk, union_graph_bonus};
+use crate::graph::{GraphStore, expand_and_union_hybrid};
 use crate::index::{FullTextIndex, HybridSearchCoordinator};
 use crate::mcp::types::{
     JsonRpcError, JsonRpcRequest, JsonRpcResponse, MCP_PROTOCOL_VERSION, McpCallToolResult,
@@ -216,27 +216,25 @@ impl McpDispatcher {
 
         // 4. Knowledge graph expansion
         let fused = if let Some(ref graph) = self.graph {
-            let hits = graph.expand(&args.query, 2);
-            let mut resolved = Vec::new();
-            for hit in &hits {
-                for r in &hit.source_refs {
-                    for chunk in self.store.chunks_matching_ref(r).await {
-                        resolved.push(ResolvedGraphChunk {
-                            chunk,
-                            paths: hit.paths.clone(),
-                        });
-                    }
-                }
-            }
-            union_graph_bonus(
+            expand_and_union_hybrid(
+                graph.as_ref(),
                 fused,
-                &resolved,
+                &args.query,
+                2,
                 if self.reranker.is_none() {
                     Some(top_k)
                 } else {
                     None
                 },
+                {
+                    let store = Arc::clone(&self.store);
+                    move |r| {
+                        let store = Arc::clone(&store);
+                        async move { store.chunks_matching_ref(&r).await }
+                    }
+                },
             )
+            .await
         } else {
             fused
         };

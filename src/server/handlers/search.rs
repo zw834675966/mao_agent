@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Instant;
 
 use axum::{Json, extract::State, http::StatusCode};
@@ -142,28 +143,26 @@ async fn handle_search_inner(
             };
             let fused = state.hybrid.fuse(vec_results, bm25_results, top_k * 2);
             let fused = if let Some(graph) = state.graph.as_ref() {
-                let hits = graph.expand(&req.query, 2);
-                let mut resolved = Vec::new();
-                for hit in &hits {
-                    for r in &hit.source_refs {
-                        for chunk in state.store.chunks_matching_ref(r).await {
-                            resolved.push(crate::graph::ResolvedGraphChunk {
-                                chunk,
-                                paths: hit.paths.clone(),
-                            });
-                        }
-                    }
-                }
                 let skip = req.no_rerank.unwrap_or(false);
-                crate::graph::union_graph_bonus(
+                crate::graph::expand_and_union_hybrid(
+                    graph.as_ref(),
                     fused,
-                    &resolved,
+                    &req.query,
+                    2,
                     if skip || state.reranker.is_none() {
                         Some(top_k)
                     } else {
                         None
                     },
+                    {
+                        let store = Arc::clone(&state.store);
+                        move |r| {
+                            let store = Arc::clone(&store);
+                            async move { store.chunks_matching_ref(&r).await }
+                        }
+                    },
                 )
+                .await
             } else {
                 fused
             };

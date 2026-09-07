@@ -1,8 +1,9 @@
 use crate::graph::SourceRef;
-use crate::graph::store::GraphExpandHit;
+use crate::graph::store::{GraphExpandHit, GraphStore};
 use crate::index::HybridSearchResult;
 use crate::model::DocumentChunk;
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
 
 /// Turn expander hits into unique chunks via a `source_ref` lookup (unresolved refs dropped).
 pub fn resolve_graph_chunks(
@@ -29,6 +30,47 @@ pub fn resolve_graph_chunks(
         }
     }
     by_id.into_values().collect()
+}
+
+/// Async variant of [`resolve_graph_chunks`]: prefetch unique `source_refs` via `lookup`, then dedupe.
+///
+/// `lookup` takes an owned [`SourceRef`] so callers can `async move` without borrowing the key.
+pub async fn resolve_graph_chunks_async<F, Fut>(
+    hits: &[GraphExpandHit],
+    mut lookup: F,
+) -> Vec<ResolvedGraphChunk>
+where
+    F: FnMut(SourceRef) -> Fut,
+    Fut: Future<Output = Vec<DocumentChunk>>,
+{
+    let mut cache: HashMap<SourceRef, Vec<DocumentChunk>> = HashMap::new();
+    for hit in hits {
+        for r in &hit.source_refs {
+            if let std::collections::hash_map::Entry::Vacant(e) = cache.entry(r.clone()) {
+                e.insert(lookup(r.clone()).await);
+            }
+        }
+    }
+    resolve_graph_chunks(hits, |r| cache.get(r).cloned().unwrap_or_default())
+}
+
+/// Expand `query` on `graph`, resolve refs via async `lookup`, then [`union_graph_bonus`].
+/// Shared by CLI / DialecticalAgent / MCP / HTTP search — one place for hop count + union policy.
+pub async fn expand_and_union_hybrid<F, Fut>(
+    graph: &GraphStore,
+    fused: Vec<HybridSearchResult>,
+    query: &str,
+    hops: u8,
+    final_top_k: Option<usize>,
+    lookup: F,
+) -> Vec<HybridSearchResult>
+where
+    F: FnMut(SourceRef) -> Fut,
+    Fut: Future<Output = Vec<DocumentChunk>>,
+{
+    let hits = graph.expand(query, hops);
+    let resolved = resolve_graph_chunks_async(&hits, lookup).await;
+    union_graph_bonus(fused, &resolved, final_top_k)
 }
 
 /// Max graph-unique chunks appended to the pre-rerank pool.

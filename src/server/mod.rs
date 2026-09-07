@@ -152,6 +152,7 @@ pub async fn serve(
     tracing::info!("  POST /api/v1/ask          (blocking JSON)");
     tracing::info!("  POST /api/v1/ask/stream   (SSE)");
     tracing::info!("  POST /api/v1/verify  (/citation/verify)");
+    tracing::info!("  POST /mcp  /api/v1/mcp");
     serve_with_shutdown(app, addr, GracefulShutdown::wait()).await
 }
 
