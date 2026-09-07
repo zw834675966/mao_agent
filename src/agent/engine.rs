@@ -2,17 +2,18 @@ use crate::agent::llm::{FallbackLlmClient, LlmClient};
 use crate::agent::prompt::build_rag_user_prompt_with_triples;
 use crate::agent::verifier::{CitationVerifier, VerificationReport};
 use crate::error::Result;
-use crate::graph::{GraphStore, expand_with_graph};
+use crate::graph::GraphStore;
 use crate::index::fulltext::FullTextIndex;
 use crate::index::hybrid::HybridSearchCoordinator;
+use crate::index::HybridSearchService;
 use crate::model::{DocumentChunk, VectorFilter};
-use crate::rerank::{Reranker, rerank_or_fallback};
+use crate::rerank::Reranker;
 use crate::vector::store::VectorStore;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, LazyLock};
-use tracing::{info, warn};
+use tracing::info;
 
 static QUOTE_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#"["“]([^"”]{6,200})["”]"#).unwrap());
@@ -35,13 +36,9 @@ pub struct AgentAnswer {
 
 /// Dialectical Reasoning Agent orchestrating hybrid retrieval, LLM synthesis, and citation verification.
 pub struct DialecticalAgent {
-    store: Arc<VectorStore>,
-    fulltext_index: Option<Arc<FullTextIndex>>,
-    hybrid_coordinator: HybridSearchCoordinator,
+    search_service: HybridSearchService,
     verifier: CitationVerifier,
     llm: Arc<dyn LlmClient>,
-    reranker: Option<Arc<dyn Reranker>>,
-    graph: Option<Arc<GraphStore>>,
 }
 
 impl DialecticalAgent {
@@ -84,24 +81,27 @@ impl DialecticalAgent {
             fallback = fallback.with_fallback_counter(counter);
         }
         let llm: Arc<dyn LlmClient> = Arc::new(fallback);
-        Self {
+        let search_service = HybridSearchService::new(
             store,
             fulltext_index,
-            hybrid_coordinator: HybridSearchCoordinator::default(),
+            HybridSearchCoordinator::default(),
+            None,
+            reranker,
+        );
+        Self {
+            search_service,
             verifier: CitationVerifier::default(),
             llm,
-            reranker,
-            graph: None,
         }
     }
 
     pub fn with_graph(mut self, graph: Arc<GraphStore>) -> Self {
-        self.graph = Some(graph);
+        self.search_service.graph = Some(graph);
         self
     }
 
     fn graph_triples(&self, question: &str) -> Vec<String> {
-        let Some(graph) = self.graph.as_ref() else {
+        let Some(graph) = self.search_service.graph.as_ref() else {
             return Vec::new();
         };
         graph
@@ -121,55 +121,19 @@ impl DialecticalAgent {
     ) -> Result<AgentAnswer> {
         info!("DialecticalAgent processing query: {}", question);
 
-        // 1. Retrieve evidence chunks (Hybrid search if FullTextIndex is configured, otherwise Vector search)
-        let (retrieved_chunks, rerank_applied, rerank_scores): (
-            Vec<DocumentChunk>,
-            bool,
-            Option<Vec<f32>>,
-        ) = if let Some(ref ft) = self.fulltext_index {
-            let vec_results = self.store.search(question, top_k * 2, filter).await?;
-            let bm25_results = match ft.search(question, top_k * 2, filter) {
-                Ok(results) => results,
-                Err(e) => {
-                    warn!("BM25 search failed: {e}, falling back to vector-only retrieval.");
-                    Vec::new()
-                }
-            };
-            let fused = self
-                .hybrid_coordinator
-                .fuse(vec_results, bm25_results, top_k * 2);
-            let fused = expand_with_graph(
-                self.graph.as_deref(),
-                &self.store,
-                fused,
-                question,
-                if self.reranker.is_some() {
-                    None
-                } else {
-                    Some(top_k)
-                },
-            )
-            .await;
-            let reranked =
-                rerank_or_fallback(fused, self.reranker.as_deref(), question, top_k).await;
-            let applied = reranked.iter().any(|r| r.rerank_score.is_some());
-            let scores = if applied {
-                Some(
-                    reranked
-                        .iter()
-                        .map(|r| r.rerank_score.unwrap_or(0.0))
-                        .collect(),
-                )
-            } else {
-                None
-            };
-            let chunks = reranked.into_iter().map(|r| r.chunk).collect();
-            (chunks, applied, scores)
+        // 1. Retrieve evidence chunks via the hybrid search service.
+        let results = self
+            .search_service
+            .search_hybrid(question, top_k, filter, false)
+            .await?;
+        let rerank_applied = results.iter().any(|r| r.rerank_score.is_some());
+        let rerank_scores = if rerank_applied {
+            Some(results.iter().map(|r| r.rerank_score.unwrap_or(0.0)).collect())
         } else {
-            let search_results = self.store.search(question, top_k, filter).await?;
-            let chunks = search_results.into_iter().map(|r| r.chunk).collect();
-            (chunks, false, None)
+            None
         };
+        let retrieved_chunks: Vec<DocumentChunk> =
+            results.into_iter().map(|r| r.chunk).collect();
 
         if retrieved_chunks.is_empty() {
             return Ok(AgentAnswer {
