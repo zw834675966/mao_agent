@@ -1,3 +1,7 @@
+---
+category: engineering
+---
+
 # 黑客定律与工程法则外部引用文献全索引 (External References Index)
 
 本目录收录了黑客定律语料库（`corpus/hacker_laws/`）中所有条目所引用的外部维基百科页面、奠基论文、技术博客、经典书单与在线技术报告全文资料。
