@@ -1,3 +1,6 @@
+pub mod eval_cmd;
+pub mod runtime;
+
 use crate::vector::embedder::{COHERE_CHAT_MODEL, COHERE_COMPAT_BASE_URL, COHERE_EMBED_MODEL};
 use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;

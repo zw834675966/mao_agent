@@ -80,3 +80,15 @@ Metrics: `GET /metrics` (Prometheus), `GET /api/v1/metrics` (JSON). Includes `ma
 ## 5. Shutdown
 
 Ctrl+C / SIGTERM triggers graceful drain (`GracefulShutdown`).
+
+## 6. MCP (stdio / HTTP)
+
+```bash
+# After offline ingest:
+cargo run --no-default-features -- mcp --offline --index-file data/vector_store.bin
+# HTTP: POST /mcp and /api/v1/mcp on the serve process (same auth/CORS as other API routes).
+```
+
+- MCP `verify_historical_citation` auto-retrieves corpus text by `claimed_title` when `context_chunks` are omitted.
+- HTTP `POST /api/v1/verify` still requires caller-supplied `context_chunks` (explicit grounding). See `docs/ops/mcp_sre_guide.md`.
+
