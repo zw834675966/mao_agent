@@ -1,3 +1,4 @@
+use crate::corpus::Domain;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
@@ -172,7 +173,7 @@ fn date_to_interval(date_str: &str) -> Option<(String, String)> {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct DocumentMetadata {
     pub title: String,
-    #[serde(default = "default_author")]
+    #[serde(default)]
     pub author: String,
     #[serde(default = "default_unknown")]
     pub date: String,
@@ -194,10 +195,6 @@ pub struct DocumentMetadata {
     pub tags: Vec<String>,
     #[serde(flatten)]
     pub extra: HashMap<String, serde_json::Value>,
-}
-
-fn default_author() -> String {
-    "毛泽东".to_string()
 }
 
 fn default_unknown() -> String {
@@ -227,6 +224,8 @@ pub struct DocumentChunk {
     pub date: String,
     pub volume: String,
     pub category: String,
+    #[serde(default)]
+    pub domain: Domain,
     pub tags: Vec<String>,
     pub chunk_index: usize,
     pub total_chunks: usize,
@@ -265,6 +264,8 @@ pub struct VectorFilter {
     pub doc_id: Option<String>,
     /// Plaintext keyword filter that must appear in text
     pub keyword: Option<String>,
+    /// Domain filter (History, Engineering, Any = no filter)
+    pub domain: Option<Domain>,
 }
 
 impl VectorFilter {
@@ -298,17 +299,22 @@ impl VectorFilter {
         self
     }
 
+    pub fn with_domain(mut self, domain: Domain) -> Self {
+        self.domain = Some(domain);
+        self
+    }
+
     /// Periods allowed by this filter.
     ///
     /// If both `period` and `periods` are set, **`periods` wins** (Scout Rule: one source of truth).
-    pub fn effective_periods(&self) -> Option<Vec<HistoricalPeriod>> {
+    pub fn effective_periods(&self) -> Option<&[HistoricalPeriod]> {
         if let Some(ref periods) = self.periods {
             if periods.is_empty() {
                 return None;
             }
-            return Some(periods.clone());
+            return Some(periods.as_slice());
         }
-        self.period.map(|p| vec![p])
+        self.period.as_ref().map(std::slice::from_ref)
     }
 
     pub fn with_periods(mut self, periods: Vec<HistoricalPeriod>) -> Self {
@@ -404,6 +410,12 @@ impl VectorFilter {
         {
             return false;
         }
+        if let Some(ref domain) = self.domain
+            && *domain != Domain::Any
+            && chunk.domain != *domain
+        {
+            return false;
+        }
         true
     }
 }
@@ -480,6 +492,7 @@ mod tests {
             date: "1938-05".to_string(),
             volume: "选集第二卷".to_string(),
             category: "军事".to_string(),
+            domain: Domain::Any,
             tags: vec!["持久战".to_string()],
             chunk_index: 0,
             total_chunks: 1,
@@ -514,6 +527,7 @@ mod tests {
             date: "未知".to_string(),
             volume: "选集".to_string(),
             category: "其他".to_string(),
+            domain: Domain::Any,
             tags: vec![],
             chunk_index: 0,
             total_chunks: 1,
@@ -544,6 +558,7 @@ mod tests {
             date: "1936-02-29".to_string(),
             volume: "选集第一卷".to_string(),
             category: "军事".to_string(),
+            domain: Domain::Any,
             tags: vec![],
             chunk_index: 0,
             total_chunks: 1,
@@ -571,6 +586,7 @@ mod tests {
             date: "1938".to_string(),
             volume: "二卷".to_string(),
             category: "军事".to_string(),
+            domain: Domain::Any,
             tags: vec![],
             chunk_index: 0,
             total_chunks: 1,
@@ -588,7 +604,7 @@ mod tests {
         );
         assert_eq!(
             f.effective_periods(),
-            Some(vec![HistoricalPeriod::WarOfResistance])
+            Some(&[HistoricalPeriod::WarOfResistance][..])
         );
 
         f.normalize_periods();
@@ -604,7 +620,7 @@ mod tests {
         assert!(f.period.is_none());
         assert_eq!(
             f.effective_periods(),
-            Some(vec![HistoricalPeriod::WarOfLiberation])
+            Some(&[HistoricalPeriod::WarOfLiberation][..])
         );
     }
 
@@ -618,6 +634,7 @@ mod tests {
             date: "1938-05".to_string(),
             volume: volume.to_string(),
             category: category.to_string(),
+            domain: Domain::Any,
             tags,
             chunk_index: 0,
             total_chunks: 1,

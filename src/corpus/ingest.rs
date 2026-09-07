@@ -7,6 +7,9 @@ use tracing::{info, warn};
 /// Corpus file scanner and batch loader.
 pub struct CorpusScanner;
 
+/// Directory name to exclude during recursive corpus scanning.
+const RAW_DIR_NAME: &str = "raw";
+
 impl CorpusScanner {
     /// Recursively scan a directory for all markdown files (`.md`, `.markdown`).
     pub fn scan_dir<P: AsRef<Path>>(dir: P) -> Result<Vec<PathBuf>> {
@@ -30,6 +33,9 @@ impl CorpusScanner {
                 let entry = entry?;
                 let path = entry.path();
                 if path.is_dir() {
+                    if path.file_name().is_some_and(|n| n == RAW_DIR_NAME) {
+                        continue; // Skip raw/ directories (C1: raw assets exclusion)
+                    }
                     Self::collect_markdown_files(&path, files)?;
                 } else if let Some(ext) = path.extension()
                     && (ext == "md" || ext == "markdown")

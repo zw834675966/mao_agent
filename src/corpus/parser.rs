@@ -1,3 +1,4 @@
+use crate::corpus::Domain;
 use crate::corpus::cleaner::clean_cjk_spaces;
 use crate::error::{Result, VectorError};
 use crate::model::{Document, DocumentMetadata, HistoricalPeriod};
@@ -17,6 +18,17 @@ static FN_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(?:\[\d+\]|〔\d+〕|\*\s*注\s*释|\*\s*题\s*注)\s*(.*)$").unwrap()
 });
 
+/// Default author derived from a document's `category` (C2 fix).
+///
+/// History literature keeps the canonical author; engineering/other literature
+/// defaults to "未知" instead of falsely attributing everything to 毛泽东.
+fn default_author_for_category(category: &str) -> String {
+    match Domain::from_category(category) {
+        Domain::History => "毛泽东".to_string(),
+        _ => "未知".to_string(),
+    }
+}
+
 /// Parser for historical Markdown documents with YAML frontmatter.
 pub struct MarkdownParser;
 
@@ -26,9 +38,21 @@ impl MarkdownParser {
         let (metadata, raw_body) = if let Some(caps) = FRONTMATTER_REGEX.captures(content) {
             let yaml_str = caps.get(1).map(|m| m.as_str()).unwrap_or("");
             let body_str = caps.get(2).map(|m| m.as_str()).unwrap_or("");
-            let meta: DocumentMetadata = serde_yaml::from_str(yaml_str).map_err(|e| {
+
+            // Detect explicit author presence before serde default fills in "毛泽东".
+            let yaml_value: serde_yaml::Value = serde_yaml::from_str(yaml_str).map_err(|e| {
                 VectorError::FrontmatterError(format!("Failed to parse YAML frontmatter: {e}"))
             })?;
+            let has_author = yaml_value.get("author").is_some();
+            let mut meta: DocumentMetadata = serde_yaml::from_value(yaml_value).map_err(|e| {
+                VectorError::FrontmatterError(format!("Failed to parse YAML frontmatter: {e}"))
+            })?;
+
+            // C2: default author by category when no explicit author field
+            if !has_author {
+                meta.author = default_author_for_category(&meta.category);
+            }
+
             (meta, body_str)
         } else {
             // Default fallback if no frontmatter is found
@@ -39,7 +63,7 @@ impl MarkdownParser {
                 .to_string();
             let meta = DocumentMetadata {
                 title: fallback_title,
-                author: "毛泽东".to_string(),
+                author: default_author_for_category(""),
                 date: "未知".to_string(),
                 ..Default::default()
             };

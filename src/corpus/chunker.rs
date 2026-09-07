@@ -1,3 +1,4 @@
+use crate::corpus::Domain;
 use crate::model::{Document, DocumentChunk};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -132,6 +133,7 @@ impl ChineseSemanticChunker {
                 volume: doc.metadata.volume.clone(),
                 category: doc.metadata.category.clone(),
                 tags: doc.metadata.tags.clone(),
+                domain: Domain::from_category(&doc.metadata.category),
                 chunk_index: idx,
                 total_chunks,
                 char_count,
