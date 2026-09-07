@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 use crate::graph::GraphStore;
-use crate::index::{FullTextIndex, HybridSearchCoordinator};
+use crate::index::{FullTextIndex, HybridSearchCoordinator, HybridSearchService};
 use crate::rerank::Reranker;
 use crate::server::error::{ApiError, ApiResult};
 use crate::server::metrics::HttpMetrics;
@@ -31,6 +31,8 @@ pub struct AppState {
     pub ask_semaphore: Arc<Semaphore>,
     /// Optional knowledge graph for hybrid candidate expansion.
     pub graph: Option<Arc<GraphStore>>,
+    /// Unified hybrid search service (vector + BM25 + RRF + graph + rerank).
+    pub search_service: Arc<HybridSearchService>,
 }
 
 impl AppState {
@@ -95,11 +97,20 @@ impl AppState {
         max_concurrent_asks: usize,
     ) -> Self {
         let limit = max_concurrent_asks.max(1);
+        let coordinator = Arc::new(hybrid);
+        let search_service = HybridSearchService {
+            store: store.clone(),
+            fulltext: tantivy.clone(),
+            coordinator: coordinator.clone(),
+            graph: None,
+            reranker: reranker.clone(),
+        };
         Self {
             store,
             tantivy,
-            hybrid: Arc::new(hybrid),
+            hybrid: coordinator,
             reranker,
+            search_service: Arc::new(search_service),
             chat_base_url,
             chat_api_key,
             chat_model,
@@ -114,7 +125,14 @@ impl AppState {
     }
 
     pub fn with_graph(mut self, graph: Arc<GraphStore>) -> Self {
-        self.graph = Some(graph);
+        self.graph = Some(graph.clone());
+        self.search_service = Arc::new(HybridSearchService {
+            store: self.store.clone(),
+            fulltext: self.tantivy.clone(),
+            coordinator: self.hybrid.clone(),
+            graph: Some(graph),
+            reranker: self.reranker.clone(),
+        });
         self
     }
 

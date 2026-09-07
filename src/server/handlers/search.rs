@@ -3,7 +3,6 @@ use std::time::Instant;
 use axum::{Json, extract::State, http::StatusCode};
 
 use crate::model::VectorFilter;
-use crate::rerank::rerank_or_fallback;
 use crate::server::dto::{SearchHit, SearchRequest, SearchResponse};
 use crate::server::error::{ApiError, ApiResult};
 use crate::server::state::AppState;
@@ -78,10 +77,9 @@ async fn handle_search_inner(
     let (hits, mode_used) = match mode.as_str() {
         "vector" => {
             let results = state
-                .store
-                .search(&req.query, top_k, filter.as_ref())
-                .await
-                .map_err(ApiError::from)?;
+                .search_service
+                .search_vector(&req.query, top_k, filter.as_ref())
+                .await?;
             let hits: Vec<SearchHit> = results
                 .into_iter()
                 .filter(|r| req.min_score.is_none_or(|m| r.score >= m))
@@ -99,14 +97,9 @@ async fn handle_search_inner(
             (hits, "vector")
         }
         "bm25" => {
-            let tantivy = state.tantivy.as_ref().ok_or_else(|| {
-                ApiError::service_unavailable(
-                    "Tantivy index not loaded: run `mao_agent ingest` first",
-                )
-            })?;
-            let results = tantivy
-                .search(&req.query, top_k, filter.as_ref())
-                .map_err(ApiError::from)?;
+            let results = state
+                .search_service
+                .search_bm25(&req.query, top_k, filter.as_ref())?;
             let hits: Vec<SearchHit> = results
                 .into_iter()
                 .map(|r| SearchHit {
@@ -123,45 +116,16 @@ async fn handle_search_inner(
             (hits, "bm25")
         }
         _ => {
-            // hybrid: RRF fuse (top_k*2) then optional rerank → top_k
-            let vec_results = state
-                .store
-                .search(&req.query, top_k * 2, filter.as_ref())
-                .await
-                .map_err(ApiError::from)?;
-            let bm25_results = if let Some(ref ft) = state.tantivy {
-                match ft.search(&req.query, top_k * 2, filter.as_ref()) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        tracing::warn!("BM25 search failed: {e}, continuing vector-only");
-                        Vec::new()
-                    }
-                }
-            } else {
-                Vec::new()
-            };
-            let fused = state.hybrid.fuse(vec_results, bm25_results, top_k * 2);
-            let skip = req.no_rerank.unwrap_or(false);
-            let final_k = if skip || state.reranker.is_none() {
-                Some(top_k)
-            } else {
-                None
-            };
-            let fused = crate::graph::expand_with_graph(
-                state.graph.as_deref(),
-                &state.store,
-                fused,
-                &req.query,
-                final_k,
-            )
-            .await;
-            let skip_rerank = req.no_rerank.unwrap_or(false);
-            let reranker = if skip_rerank {
-                None
-            } else {
-                state.reranker.as_deref()
-            };
-            let fused = rerank_or_fallback(fused, reranker, &req.query, top_k).await;
+            // hybrid: unified service pipeline (vector + BM25 + RRF + graph + rerank)
+            let fused = state
+                .search_service
+                .search_hybrid(
+                    &req.query,
+                    top_k,
+                    filter.as_ref(),
+                    req.no_rerank.unwrap_or(false),
+                )
+                .await?;
             let mut hits: Vec<SearchHit> = fused
                 .into_iter()
                 .map(|r| SearchHit {
