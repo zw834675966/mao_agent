@@ -408,33 +408,6 @@ fn try_load_graph(path: &Path) -> Option<mao_agent::GraphStore> {
     }
 }
 
-async fn expand_hybrid_with_graph(
-    store: &VectorStore,
-    fused: Vec<mao_agent::index::HybridSearchResult>,
-    query: &str,
-    top_k: usize,
-    graph_file: &Path,
-    rerank: bool,
-) -> Vec<mao_agent::index::HybridSearchResult> {
-    let Some(graph) = try_load_graph(graph_file) else {
-        return fused;
-    };
-    let hits = graph.expand(query, 2);
-    let mut resolved = Vec::new();
-    for hit in &hits {
-        for r in &hit.source_refs {
-            for chunk in store.chunks_matching_ref(r).await {
-                resolved.push(mao_agent::ResolvedGraphChunk {
-                    chunk,
-                    paths: hit.paths.clone(),
-                });
-            }
-        }
-    }
-    let final_k = if rerank { None } else { Some(top_k) };
-    mao_agent::union_graph_bonus(fused, &resolved, final_k)
-}
-
 fn print_search_header(args: &SearchArgs) {
     println!(
         "\n🔍 执行检索 [模式: {}]: \"{}\" (Top-{})",
@@ -622,20 +595,21 @@ async fn search_hybrid(
     };
 
     let coordinator = mao_agent::index::HybridSearchCoordinator::default();
-    let fused = coordinator.fuse(vec_results, bm25_results, args.top_k * 2);
+    let fused = coordinator.fuse_adaptive(&args.query, vec_results, bm25_results, args.top_k * 2);
     let reranker = make_reranker(
         args.embedder.offline,
         args.no_rerank,
         args.rerank_model.clone(),
         args.embedder.embed_api_key.as_deref(),
     );
-    let fused = expand_hybrid_with_graph(
+    let graph = try_load_graph(&args.graph_file);
+    let final_k = if reranker.is_some() { None } else { Some(args.top_k) };
+    let fused = mao_agent::expand_with_graph(
+        graph.as_ref(),
         &store,
         fused,
         &args.query,
-        args.top_k,
-        &args.graph_file,
-        reranker.is_some(),
+        final_k,
     )
     .await;
     let rerank_start = std::time::Instant::now();
@@ -1210,7 +1184,7 @@ async fn retrieve_chunk_ids_for_eval(
                 Vec::new()
             };
             let coordinator = mao_agent::index::HybridSearchCoordinator::default();
-            let fused = coordinator.fuse(vec_results, bm25_results, k * 2);
+            let fused = coordinator.fuse_adaptive(query, vec_results, bm25_results, k * 2);
             let hybrid = mao_agent::rerank_or_fallback(fused, reranker, query, k).await;
             Ok(hybrid.into_iter().map(|r| r.chunk_id).collect())
         }

@@ -867,6 +867,7 @@ mod tests {
                 title
             ),
             section_path: vec!["战略问题".to_string()],
+parent_text: None,
         }
     }
 

@@ -21,6 +21,7 @@ fn chunk(id: &str, title: &str) -> DocumentChunk {
         raw_text: title.to_string(),
         contextualized_text: title.to_string(),
         section_path: vec![],
+        parent_text: None,
     }
 }
 
@@ -41,6 +42,7 @@ fn graph_chunk(id: &str, title: &str, path: &str) -> ResolvedGraphChunk {
     ResolvedGraphChunk {
         chunk: chunk(id, title),
         paths: vec![path.to_string()],
+        hop: 0,
     }
 }
 
@@ -72,8 +74,10 @@ fn overlapping_chunk_keeps_rrf_and_gains_paths() {
 }
 
 #[test]
-fn graph_unique_has_zero_rrf_and_reserved_tail_slots() {
-    let dual: Vec<HybridSearchResult> = (0..5)
+fn graph_unique_has_nonzero_rrf_and_merges_by_score() {
+    // Graph-RRF gives graph-unique chunks a non-zero score based on hop distance.
+    // With k=5, 3 dual hits (high scores) + 2 graph-unique (lower scores) → all 5 appear.
+    let dual: Vec<HybridSearchResult> = (0..3)
         .map(|i| dual_hit(&format!("d{i}"), "dual", 0.02 - i as f32 * 0.001, i + 1))
         .collect();
     let graph = vec![
@@ -82,10 +86,12 @@ fn graph_unique_has_zero_rrf_and_reserved_tail_slots() {
     ];
     let out = union_graph_bonus(dual, &graph, Some(5));
     assert_eq!(out.len(), 5);
+    // Sorted by rrf_score descending: duals first (0.02, 0.019, 0.018), then graph chunks
     assert_eq!(out[3].chunk_id, "g1");
     assert_eq!(out[4].chunk_id, "g2");
-    assert_eq!(out[3].rrf_score, 0.0);
-    assert_eq!(out[4].rrf_score, 0.0);
+    let expected_graph_score = mao_agent::graph::graph_rrf_score(0, 60.0);
+    assert!((out[3].rrf_score - expected_graph_score).abs() < 1e-6);
+    assert!((out[4].rrf_score - expected_graph_score).abs() < 1e-6);
     assert!(out[0].rrf_score > out[3].rrf_score);
     assert!(out[3].graph_paths.is_some());
 }
@@ -104,5 +110,6 @@ fn pre_rerank_pool_appends_bonus_without_dropping_dual() {
     let out = union_graph_bonus(dual, &graph, None);
     assert_eq!(out.len(), 3);
     assert_eq!(out[2].chunk_id, "g1");
-    assert_eq!(out[2].rrf_score, 0.0);
+    let expected_score = mao_agent::graph::graph_rrf_score(0, 60.0);
+    assert!((out[2].rrf_score - expected_score).abs() < 1e-6);
 }

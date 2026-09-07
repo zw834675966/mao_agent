@@ -69,6 +69,7 @@ mod tests {
             raw_text: format!("text-{id}"),
             contextualized_text: format!("text-{id}"),
             section_path: vec![],
+parent_text: None,
         }
     }
 

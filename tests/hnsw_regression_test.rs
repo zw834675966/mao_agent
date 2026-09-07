@@ -34,6 +34,7 @@ fn make_chunk(id: &str) -> DocumentChunk {
         raw_text: "synthetic".to_string(),
         contextualized_text: format!("synthetic {id}"),
         section_path: vec![],
+parent_text: None,
     }
 }
 

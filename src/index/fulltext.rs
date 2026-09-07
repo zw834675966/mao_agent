@@ -466,6 +466,7 @@ mod tests {
             raw_text: text.to_string(),
             contextualized_text: format!("【文献】《{}》\n【正文】{}", title, text),
             section_path: vec!["战略总论".to_string()],
+parent_text: None,
         }
     }
 

@@ -140,33 +140,21 @@ async fn handle_search_inner(
             } else {
                 Vec::new()
             };
-            let fused = state.hybrid.fuse(vec_results, bm25_results, top_k * 2);
-            let fused = if let Some(graph) = state.graph.as_ref() {
-                let hits = graph.expand(&req.query, 2);
-                let mut resolved = Vec::new();
-                for hit in &hits {
-                    for r in &hit.source_refs {
-                        for chunk in state.store.chunks_matching_ref(r).await {
-                            resolved.push(crate::graph::ResolvedGraphChunk {
-                                chunk,
-                                paths: hit.paths.clone(),
-                            });
-                        }
-                    }
-                }
-                let skip = req.no_rerank.unwrap_or(false);
-                crate::graph::union_graph_bonus(
-                    fused,
-                    &resolved,
-                    if skip || state.reranker.is_none() {
-                        Some(top_k)
-                    } else {
-                        None
-                    },
-                )
+            let fused = state.hybrid.fuse_adaptive(&req.query, vec_results, bm25_results, top_k * 2);
+            let skip = req.no_rerank.unwrap_or(false);
+            let final_k = if skip || state.reranker.is_none() {
+                Some(top_k)
             } else {
-                fused
+                None
             };
+            let fused = crate::graph::expand_with_graph(
+                state.graph.as_deref(),
+                &state.store,
+                fused,
+                &req.query,
+                final_k,
+            )
+            .await;
             let skip_rerank = req.no_rerank.unwrap_or(false);
             let reranker = if skip_rerank {
                 None

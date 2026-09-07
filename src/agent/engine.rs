@@ -4,7 +4,7 @@ use crate::agent::verifier::{CitationVerifier, VerificationReport};
 use crate::error::Result;
 use crate::graph::{GraphStore, expand_with_graph};
 use crate::index::fulltext::FullTextIndex;
-use crate::index::hybrid::{HybridSearchCoordinator, HybridSearchResult};
+use crate::index::hybrid::HybridSearchCoordinator;
 use crate::model::{DocumentChunk, VectorFilter};
 use crate::rerank::{Reranker, rerank_or_fallback};
 use crate::vector::store::VectorStore;
@@ -100,20 +100,6 @@ impl DialecticalAgent {
         self
     }
 
-    async fn expand_fused(
-        &self,
-        fused: Vec<HybridSearchResult>,
-        question: &str,
-        top_k: usize,
-    ) -> Vec<HybridSearchResult> {
-        let final_k = if self.reranker.is_some() {
-            None
-        } else {
-            Some(top_k)
-        };
-        expand_with_graph(self.graph.as_deref(), &self.store, fused, question, final_k).await
-    }
-
     fn graph_triples(&self, question: &str) -> Vec<String> {
         let Some(graph) = self.graph.as_ref() else {
             return Vec::new();
@@ -151,8 +137,19 @@ impl DialecticalAgent {
             };
             let fused = self
                 .hybrid_coordinator
-                .fuse(vec_results, bm25_results, top_k * 2);
-            let fused = self.expand_fused(fused, question, top_k).await;
+                .fuse_adaptive(question, vec_results, bm25_results, top_k * 2);
+            let fused = expand_with_graph(
+                self.graph.as_deref(),
+                &self.store,
+                fused,
+                question,
+                if self.reranker.is_some() {
+                    None
+                } else {
+                    Some(top_k)
+                },
+            )
+            .await;
             let reranked =
                 rerank_or_fallback(fused, self.reranker.as_deref(), question, top_k).await;
             let applied = reranked.iter().any(|r| r.rerank_score.is_some());
@@ -189,8 +186,15 @@ impl DialecticalAgent {
         // 2. Build prompt with evidence chunks
         let context_texts: Vec<String> = retrieved_chunks
             .iter()
-            .map(|c| c.contextualized_text.clone())
-            .collect();
+            .map(|c| {
+            // Small-to-Big: prefer the parent context when available so cross-paragraph
+            // arguments aren't truncated at slice boundaries.
+            c.parent_text
+                .as_ref()
+                .unwrap_or(&c.contextualized_text)
+                .clone()
+        })
+        .collect();
         let triples = self.graph_triples(question);
         let user_prompt = build_rag_user_prompt_with_triples(question, &context_texts, &triples);
 
