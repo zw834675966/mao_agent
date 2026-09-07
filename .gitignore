@@ -16,3 +16,13 @@ logs/
 .workbuddy/
 .santa-reviewer-b-prompt.txt
 corpus_sample15/
+
+# Environment files and credentials
+.env
+.env.*
+!.env.example
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+desktop.ini
