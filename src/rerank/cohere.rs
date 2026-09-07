@@ -193,6 +193,7 @@ impl Reranker for CohereReranker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::corpus::Domain;
     use crate::model::{DocumentChunk, HistoricalPeriod};
     use serde_json::json;
     use wiremock::matchers::{method, path};
@@ -208,6 +209,7 @@ mod tests {
             date: "1938-05".to_string(),
             volume: "第二卷".to_string(),
             category: "军事".to_string(),
+            domain: Domain::Any,
             tags: vec![],
             chunk_index: 0,
             total_chunks: 1,

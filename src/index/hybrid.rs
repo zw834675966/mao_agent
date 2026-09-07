@@ -111,6 +111,7 @@ impl HybridSearchCoordinator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::corpus::Domain;
     use crate::model::HistoricalPeriod;
 
     fn make_chunk(id: &str, title: &str) -> DocumentChunk {
@@ -123,6 +124,7 @@ mod tests {
             date: "1938-05".to_string(),
             volume: "第二卷".to_string(),
             category: "军事".to_string(),
+            domain: Domain::Any,
             tags: vec![],
             chunk_index: 0,
             total_chunks: 1,

@@ -118,6 +118,10 @@ pub struct SearchArgs {
     #[arg(long)]
     pub category: Option<String>,
 
+    /// Filter by corpus domain: history, engineering, or any (default)
+    #[arg(long)]
+    pub domain: Option<String>,
+
     /// Minimum score threshold
     #[arg(long, default_value_t = 0.0)]
     pub min_score: f32,
@@ -178,6 +182,10 @@ pub struct AskArgs {
     /// Filter by historical period
     #[arg(short, long)]
     pub period: Option<String>,
+
+    /// Filter by corpus domain: history, engineering, or any (default)
+    #[arg(long)]
+    pub domain: Option<String>,
 
     /// LLM API base URL (OpenAI compatible). Cohere: https://api.cohere.ai/compatibility/v1
     #[arg(long, env = "COHERE_BASE_URL", default_value = COHERE_COMPAT_BASE_URL)]

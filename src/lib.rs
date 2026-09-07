@@ -18,12 +18,12 @@ pub use agent::{
     LlmClient, OfflineLlmClient, OnlineLlmClient, VerificationReport,
 };
 pub use corpus::{
-    ChineseSemanticChunker, ChunkerConfig, CorpusScanner, MarkdownParser, clean_cjk_spaces,
+    ChineseSemanticChunker, ChunkerConfig, CorpusScanner, Domain, MarkdownParser, clean_cjk_spaces,
 };
 pub use error::{Result, VectorError};
 pub use graph::{
     Entity, GraphDocument, GraphExpandHit, GraphStore, Relationship, ResolvedGraphChunk, SourceRef,
-    resolve_graph_chunks, union_graph_bonus,
+    expand_with_graph, resolve_graph_chunks, union_graph_bonus,
 };
 pub use index::{
     FullTextIndex, FullTextSearchResult, HybridSearchCoordinator, HybridSearchResult,

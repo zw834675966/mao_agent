@@ -194,6 +194,7 @@ fn is_chinese_punct(c: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::corpus::Domain;
     use crate::model::HistoricalPeriod;
 
     fn sample_chunk(chunk_id: &str, title: &str, raw_text: &str) -> DocumentChunk {
@@ -206,6 +207,7 @@ mod tests {
             date: "1938-05-26".to_string(),
             volume: "第二卷".to_string(),
             category: "军事".to_string(),
+            domain: Domain::Any,
             tags: vec![],
             chunk_index: 0,
             total_chunks: 1,
@@ -247,8 +249,8 @@ mod tests {
         let verifier = CitationVerifier::default();
 
         // Prefer real corpus sample text (论持久战 + 矛盾论).
-        let corpus_persist = include_str!("../../corpus/lun_chi_jiu_zhan.md");
-        let corpus_contradiction = include_str!("../../corpus/mao_dun_lun.md");
+        let corpus_persist = include_str!("../../corpus/history/lun_chi_jiu_zhan.md");
+        let corpus_contradiction = include_str!("../../corpus/history/mao_dun_lun.md");
 
         let persist_quote = "兵民是胜利之本。战争的伟力之最深厚的根源，存在于民众之中。";
         assert!(

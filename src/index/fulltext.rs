@@ -275,7 +275,7 @@ impl FullTextIndex {
                     ));
                 } else {
                     let period_queries: Vec<(Occur, Box<dyn Query>)> = allowed
-                        .into_iter()
+                        .iter()
                         .map(|p| {
                             let term = Term::from_field_text(self.f_period, p.as_str());
                             (
@@ -445,6 +445,7 @@ fn generate_volume_candidates(volume: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::corpus::Domain;
     use crate::model::HistoricalPeriod;
 
     fn dummy_chunk(id: &str, title: &str, period: HistoricalPeriod, text: &str) -> DocumentChunk {
@@ -457,6 +458,7 @@ mod tests {
             date: "1938-05".to_string(),
             volume: "第二卷".to_string(),
             category: "军事".to_string(),
+            domain: Domain::Any,
             tags: vec!["战略".to_string()],
             chunk_index: 0,
             total_chunks: 1,

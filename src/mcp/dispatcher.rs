@@ -7,7 +7,8 @@
 use std::sync::Arc;
 
 use crate::agent::{CitationVerifier, DialecticalAgent};
-use crate::graph::{GraphStore, ResolvedGraphChunk, union_graph_bonus};
+use crate::corpus::Domain;
+use crate::graph::{GraphStore, expand_with_graph};
 use crate::index::{FullTextIndex, HybridSearchCoordinator};
 use crate::mcp::types::{
     JsonRpcError, JsonRpcRequest, JsonRpcResponse, MCP_PROTOCOL_VERSION, McpCallToolResult,
@@ -199,13 +200,19 @@ impl McpDispatcher {
         let top_k = args.top_k.unwrap_or(3).clamp(1, 20);
 
         let mut filter = None;
-        if args.period.is_some() || args.volume.is_some() {
+        if args.period.is_some() || args.volume.is_some() || args.domain.is_some() {
             let mut f = VectorFilter::new();
             if let Some(ref p) = args.period {
                 f.period = Some(HistoricalPeriod::from_str_or_date(p));
             }
             if let Some(ref v) = args.volume {
                 f.volume = Some(v.clone());
+            }
+            if let Some(ref d) = args.domain {
+                match Domain::parse(d) {
+                    Ok(parsed) => f = f.with_domain(parsed),
+                    Err(e) => tracing::warn!("ignoring invalid MCP domain '{d}': {e}"),
+                }
             }
             filter = Some(f);
         }
@@ -234,31 +241,18 @@ impl McpDispatcher {
         let fused = self.hybrid.fuse(vec_results, bm25_results, top_k * 2);
 
         // 4. Knowledge graph expansion
-        let fused = if let Some(ref graph) = self.graph {
-            let hits = graph.expand(&args.query, 2);
-            let mut resolved = Vec::new();
-            for hit in &hits {
-                for r in &hit.source_refs {
-                    for chunk in self.store.chunks_matching_ref(r).await {
-                        resolved.push(ResolvedGraphChunk {
-                            chunk,
-                            paths: hit.paths.clone(),
-                        });
-                    }
-                }
-            }
-            union_graph_bonus(
-                fused,
-                &resolved,
-                if self.reranker.is_none() {
-                    Some(top_k)
-                } else {
-                    None
-                },
-            )
-        } else {
-            fused
-        };
+        let fused = expand_with_graph(
+            self.graph.as_deref(),
+            &self.store,
+            fused,
+            &args.query,
+            if self.reranker.is_none() {
+                Some(top_k)
+            } else {
+                None
+            },
+        )
+        .await;
 
         // 5. Optional Reranking
         let final_hits =

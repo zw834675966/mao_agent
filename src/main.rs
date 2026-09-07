@@ -4,6 +4,7 @@ use mao_agent::cli::{
     InitSamplesArgs, McpArgs, SearchArgs, ServeArgs, StatsArgs,
 };
 use mao_agent::config::{ProjectConfig, nonempty_key};
+use mao_agent::corpus::Domain;
 use mao_agent::corpus::chunker::ChunkerConfig;
 use mao_agent::corpus::ingest::CorpusScanner;
 use mao_agent::model::{HistoricalPeriod, VectorFilter};
@@ -285,8 +286,9 @@ fn build_filter(
     period: Option<&str>,
     volume: Option<&str>,
     category: Option<&str>,
+    domain: Option<&str>,
 ) -> Option<VectorFilter> {
-    if period.is_none() && volume.is_none() && category.is_none() {
+    if period.is_none() && volume.is_none() && category.is_none() && domain.is_none() {
         return None;
     }
     let mut filter = VectorFilter::new();
@@ -298,6 +300,12 @@ fn build_filter(
     }
     if let Some(c) = category {
         filter = filter.with_category(c);
+    }
+    if let Some(d) = domain {
+        match Domain::parse(d) {
+            Ok(parsed) => filter = filter.with_domain(parsed),
+            Err(e) => tracing::warn!("ignoring invalid --domain '{d}': {e}"),
+        }
     }
     Some(filter)
 }
@@ -652,6 +660,7 @@ async fn handle_search(args: &SearchArgs) -> Result<(), Box<dyn std::error::Erro
         args.period.as_deref(),
         args.volume.as_deref(),
         args.category.as_deref(),
+        args.domain.as_deref(),
     );
     print_search_header(args);
 
@@ -858,7 +867,7 @@ async fn handle_ask(args: &AskArgs) -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
-    let filter = build_filter(args.period.as_deref(), None, None);
+    let filter = build_filter(args.period.as_deref(), None, None, args.domain.as_deref());
     let reranker = make_reranker(
         args.embedder.offline,
         args.no_rerank,
@@ -1139,6 +1148,7 @@ fn eval_filter_from_query(f: &Option<EvalQueryFilter>) -> Option<VectorFilter> {
         f.period.as_deref(),
         f.volume.as_deref(),
         f.category.as_deref(),
+        None,
     )
 }
 

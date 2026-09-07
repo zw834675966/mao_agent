@@ -216,6 +216,7 @@ pub struct QueryDialecticalArgs {
     pub top_k: Option<usize>,
     pub period: Option<String>,
     pub volume: Option<String>,
+    pub domain: Option<String>,
     pub synthesize: Option<bool>,
 }
 
@@ -254,6 +255,11 @@ pub fn query_dialectical_principles_tool() -> McpToolDefinition {
                 "volume": {
                     "type": "string",
                     "description": "毛选卷次过滤（例如：第一卷、第二卷、第三卷、第四卷、第五卷）"
+                },
+                "domain": {
+                    "type": "string",
+                    "description": "语料域过滤：history（历史文献）、engineering（工程文献）、any（不限，默认）",
+                    "enum": ["history", "engineering", "any"]
                 },
                 "synthesize": {
                     "type": "boolean",

@@ -310,6 +310,7 @@ fn extract_key_quote(raw_text: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::corpus::Domain;
     use serde_json::json;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -369,6 +370,7 @@ mod tests {
             date: "1938-05".into(),
             volume: "第二卷".into(),
             category: "军事".into(),
+            domain: Domain::Any,
             tags: vec![],
             chunk_index: 0,
             total_chunks: 1,

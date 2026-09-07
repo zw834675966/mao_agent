@@ -46,7 +46,7 @@ cargo build --release
 ```bash
 cp config.example.toml config.toml
 ```
-生产嵌入走 **硅基流动 SiliconFlow**（`BAAI/bge-m3`，1024 维）。在 `config.toml` 填写（或 `SILICONFLOW_API_KEY`），**不要把真实密钥写进仓库**：
+生产嵌入走 **硅基流动 SiliconFlow**（`BAAI/bge-m3`，1024 维）。在 `config.toml` 填写或通过环境变量注入，**不要把真实密钥写进仓库**：
 ```toml
 [siliconflow]
 api_key = ""
@@ -54,9 +54,11 @@ base_url = "https://api.siliconflow.cn/v1"
 model = "BAAI/bge-m3"
 dimension = 1024
 ```
+SiliconFlow 密钥解析（clap：`--embed-api-key` 绑定 env `EMBED_API_KEY`）：`--embed-api-key` → `EMBED_API_KEY` → `SILICONFLOW_API_KEY` → `config.toml [siliconflow].api_key`。两 env 同时存在时 **`EMBED_API_KEY` 优先于 `SILICONFLOW_API_KEY`**。
+
 批量入库建议 `--batch-size 16~32`（默认 32）。免费额度约 2000 RPM / 500k TPM；远程批次之间 CLI 会间隔 100ms，降低 HTTP 429。
 
-可选：`[gemini]` 做 768 维嵌入；`[cohere]` 仅用于 chat / rerank。无 Cohere key 时 `ask` 走离线四阶段模板。`--embed-provider` 可强制指定。多个 key 同时存在时 **SiliconFlow 优先于 Gemini**。
+可选：`[gemini]` 做 768 维嵌入；`[cohere]` 仅用于 chat / rerank。无 Cohere key 时 `ask` 走离线四阶段模板。`--embed-provider` 可强制指定。多个 provider key 同时存在时 **SiliconFlow 优先于 Gemini**。
 
 ---
 
@@ -104,8 +106,11 @@ cargo run -- init-samples
 ingest 与 search/ask **必须使用同一嵌入后端**。混用 `--offline` 与 FastEmbed/Cohere 会因模型或维数不匹配而失败（需重新 ingest）。
 
 ```bash
-# 使用 Google Gemini 向量模型（推荐 768 维，支持自动读取 config.toml 或 GEMINI_API_KEY）
+# 生产推荐：硅基流动 SiliconFlow（BAAI/bge-m3，1024 维；读 EMBED_API_KEY / SILICONFLOW_API_KEY / config.toml）
 cargo run -- ingest --corpus-dir corpus --batch-size 32
+
+# 可选：Google Gemini 向量模型（推荐 768 维；GEMINI_API_KEY 或 config.toml [gemini]）
+cargo run -- ingest --embed-provider gemini --corpus-dir corpus --batch-size 32
 
 # 无网 / 无 API key：全程 --offline（确定性 hash，默认 512 维）
 cargo run -- ingest --offline --corpus-dir corpus --batch-size 32
@@ -115,12 +120,26 @@ cargo run -- ingest --offline --corpus-dir corpus --batch-size 32
 cargo run -- ingest --corpus-dir corpus --batch-size 32
 ```
 
-### 3. 多模式文献检索 (Search)
-Hybrid 模式默认在 RRF 融合后调用 Cohere Rerank（`rerank-v3.5`，`POST https://api.cohere.com/v2/rerank`）。有 `COHERE_API_KEY` / `EMBED_API_KEY` / `config.toml [cohere].api_key` 时自动启用；`--offline`、`--no-rerank` 或无 key 时跳过并保留融合顺序。可用 `--rerank-model` / `COHERE_RERANK_MODEL` 覆盖模型。
+### 3. 知识图谱摄取 (ingest-graph)
+将 `scripts/build_knowledge_graph.py` 产出的 JSON 图编译为 bincode 快照（缺省路径与 clap 一致）：
 
 ```bash
-# 使用 Gemini 向量进行混合检索
+# 默认 --input data/graph_store.json → --output data/graph_store.bin
+cargo run -- ingest-graph
+
+cargo run -- ingest-graph --input data/graph_store.json --output data/graph_store.bin
+```
+缺失的 `--graph-file` 在 search/ask/serve/mcp 中为 no-op（仅 hybrid 会用图扩展）。
+
+### 4. 多模式文献检索 (Search)
+Hybrid 模式默认在 RRF 融合后调用 Cohere Rerank（`rerank-v3.5`，`POST https://api.cohere.com/v2/rerank`）。有 `COHERE_API_KEY` / `EMBED_API_KEY` / `config.toml [cohere].api_key` 时自动启用；`--offline`、`--no-rerank` 或无 key 时跳过并保留融合顺序。可用 `--rerank-model` / `COHERE_RERANK_MODEL` 覆盖模型。`ask` / `serve` 的 `--api-key`（以及绑定的 `COHERE_API_KEY`）也可作为 rerank 的 key hint（优先于 env 链中的后续项）。
+
+`--graph-file`（默认 `data/graph_store.bin`）：文件缺失为 no-op；**仅 hybrid** 用知识图谱做候选扩展，`vector` / `bm25` 模式忽略该参数。
+
+```bash
+# 使用当前嵌入后端进行混合检索（可带图谱扩展）
 cargo run -- search "墨菲定律与高可用容灾" --top-k 5
+cargo run -- search "持久战的三个阶段" --graph-file data/graph_store.bin --top-k 5
 
 # 与上一节 --offline ingest 配对（offline ⇒ 不 rerank）
 cargo run -- search --offline "持久战的三个阶段" --top-k 3
@@ -132,7 +151,7 @@ cargo run -- search "持久战的三个阶段" --top-k 3
 cargo run -- search "持久战的三个阶段" --no-rerank
 cargo run -- search "持久战的三个阶段" --rerank-model rerank-v3.5
 
-# 纯向量 / 纯 BM25
+# 纯向量 / 纯 BM25（忽略 --graph-file）
 cargo run -- search --offline "主要矛盾和矛盾的主要方面" --mode vector
 cargo run -- search --offline "星星之火可以燎原" --mode bm25
 
@@ -140,21 +159,22 @@ cargo run -- search --offline "星星之火可以燎原" --mode bm25
 cargo run -- search --offline "统一战线" --period "抗日战争时期" --volume "毛泽东选集第二卷"
 ```
 
-### 4. 向量数据库状态与健康度统计 (Stats)
+### 5. 向量数据库状态与健康度统计 (Stats)
 ```bash
 # 与 --offline ingest 配对
 cargo run -- stats --offline
 ```
 
-### 5. 辩证认知推演与引文核验问答 (Ask)
-无 API key 时走离线辩证模板。嵌入后端仍须与 ingest 一致。Hybrid 召回同样支持 Cohere Rerank（`--no-rerank` / `--rerank-model` / `COHERE_RERANK_MODEL`，语义同 search）：
+### 6. 辩证认知推演与引文核验问答 (Ask)
+无 API key 时走离线辩证模板。嵌入后端仍须与 ingest 一致。Hybrid 召回同样支持 Cohere Rerank（`--no-rerank` / `--rerank-model` / `COHERE_RERANK_MODEL`，语义同 search）；`--api-key` 也可作为 rerank key hint。`--graph-file`（默认 `data/graph_store.bin`，缺失 no-op，仅 hybrid）同 search。
 
 ```bash
 cargo run -- ask --offline "抗日战争为什么是持久战？最后的胜利为什么属于中国？"
 cargo run -- ask "抗日战争为什么是持久战？" --no-rerank
+cargo run -- ask "抗日战争为什么是持久战？" --graph-file data/graph_store.bin
 ```
 
-### 6. 检索质量评估 (Eval Retrieval)
+### 7. 检索质量评估 (Eval Retrieval)
 离线 gold 查询集上计算 Recall / MRR / NDCG@k（默认 `evals/retrieval/queries.jsonl`，约 100+ 条）。可选 `--force-brute`（仅 `eval-retrieval`，不在 `search`）关闭 HNSW 做召回对比；`--no-rerank` 保留融合顺序基线。
 
 ```bash
@@ -164,21 +184,43 @@ cargo run -- eval-retrieval --offline --force-brute --json
 
 基线说明见 `evals/retrieval/BASELINE.md`。
 
-### 7. HTTP API 服务 (Serve, Axum + Tokio)
-将混合检索 / 辩证推演 / 引文核验封装为 REST + SSE 微服务，供上游业务系统或 Agent 调用。嵌入后端仍须与 ingest 一致：
+### 8. HTTP API 服务 (Serve, Axum + Tokio)
+将混合检索 / 辩证推演 / 引文核验封装为 REST + SSE 微服务，供上游业务系统或 Agent 调用。嵌入后端仍须与 ingest 一致。
+
+常用参数（与 clap 一致）：
+- `--bind`（默认 `127.0.0.1:3000`）
+- `--index-file` / `--tantivy-dir` / `--graph-file`（默认 `data/graph_store.bin`，缺失 no-op）
+- `--no-rerank` / `--rerank-model`（`COHERE_RERANK_MODEL`）；`--api-key` 也可作为 rerank key hint
+- `--cors-origins`（`MAO_CORS_ORIGINS`，覆盖 config `[server].cors_origins`）
+- `--api-token`（`MAO_API_TOKEN`；设置后受保护路由需 `Authorization: Bearer …`）
+- `--max-concurrent-asks`（默认 32，`MAO_MAX_CONCURRENT_ASKS`）
+- 另含与 serve 相同的 EmbedderArgs（`--offline` / `--embed-*` 等）
+
+运维手册：[`docs/ops/runbook.md`](docs/ops/runbook.md)。相关 ADR：[`0002` health](docs/adr/0002-health-check-semantics.md)、[`0004` CORS](docs/adr/0004-cors-allowlist.md)、[`0005` auth / concurrency](docs/adr/0005-auth-and-concurrency.md)。
 
 ```bash
 cargo run -- serve --offline --bind 127.0.0.1:3000
+
+# 带 CORS / 鉴权 / 并发上限 / 图谱 / 精排示例
+cargo run -- serve --bind 0.0.0.0:3000 \
+  --cors-origins "http://localhost:5173,http://localhost:3000" \
+  --api-token "$MAO_API_TOKEN" \
+  --max-concurrent-asks 32 \
+  --graph-file data/graph_store.bin \
+  --rerank-model rerank-v3.5
 ```
 
 | 方法与路径 | 说明 |
 |---|---|
-| `GET /health` / `GET /api/v1/health` | 存活与索引状态（chunks 数、维度、tantivy 是否加载） |
+| `GET /live` | 进程存活探针（liveness） |
+| `GET /health` / `GET /api/v1/health` | 就绪与索引状态（chunks 数、维度、tantivy 是否加载） |
+| `GET /metrics` / `GET /api/v1/metrics` | 运行指标（含 LLM fallback / MCP 计数等） |
 | `GET /api/v1/stats` | 向量库统计（时期/卷册分布、内存预估） |
 | `POST /api/v1/search` | 原子检索：`{query, top_k≤20, mode: hybrid\|vector\|bm25, period/volume/category/tags/start_date/end_date/doc_id/keyword, min_score, no_rerank}`；hybrid 结果可含 `rerank_score` |
 | `POST /api/v1/ask` | 端到端推演（阻塞 JSON）：`{question, top_k≤10, period/volume, base_url/model/api_key}`，`api_key` 也可走 `Authorization: Bearer` 头 |
 | `POST /api/v1/ask/stream` | 端到端推演（SSE）：事件 `retrieved → reranked → delta(stage) → citation → done` |
 | `POST /api/v1/verify`（别名 `/api/v1/citation/verify`） | 引文核验：`{quote, claimed_title, context_chunks, min_confidence}`，返回真子串/模糊匹配报告 |
+| `POST /mcp` / `POST /api/v1/mcp` | MCP JSON-RPC（Streamable HTTP；可能返回 `application/json`） |
 
 ```bash
 # 检索示例
@@ -192,8 +234,23 @@ curl -N -X POST http://127.0.0.1:3000/api/v1/ask/stream \
   -d '{"question":"抗日战争为什么是持久战？","top_k":2}'
 ```
 
-说明：`serve` 启动时加载 `data/vector_store.bin` + `data/tantivy_index`（缺失则自动降级并告警）；LLM 走 OpenAI 兼容协议（默认 Cohere，可配 DeepSeek/Qwen/本地 Ollama），无 key 时 `ask` 自动用离线辩证模板。
+说明：`serve` 启动时加载 `data/vector_store.bin` + `data/tantivy_index`（缺失则自动降级并告警）；可选加载 `--graph-file`；LLM 走 OpenAI 兼容协议（默认 Cohere，可配 DeepSeek/Qwen/本地 Ollama），无 key 时 `ask` 自动用离线辩证模板。
 
+### 9. MCP 服务 (stdio)
+以 Model Context Protocol（MCP 2024-11-05）在 **stdio** 上运行 JSON-RPC 服务（stdout 仅 JSON-RPC；日志走 stderr）。参数与 `serve` 类似（索引 / 图谱 / LLM / rerank / EmbedderArgs），无 HTTP bind：
+
+```bash
+# 默认 index/tantivy/graph 路径同 clap：data/vector_store.bin、data/tantivy_index、data/graph_store.bin
+cargo run -- mcp --offline
+
+cargo run -- mcp \
+  --index-file data/vector_store.bin \
+  --tantivy-dir data/tantivy_index \
+  --graph-file data/graph_store.bin \
+  --no-rerank
+```
+
+HTTP 侧 MCP 入口见上表 `POST /mcp` 与 `POST /api/v1/mcp`（由 `serve` 提供）。
 ---
 
 ## 🧪 测试与覆盖率度量 (Testing & Coverage)
@@ -243,10 +300,13 @@ mao_agent/
 │   ├── index/                     # Tantivy 全文倒排索引与 RRF 融合协调器
 │   ├── graph/                     # 知识图谱扩展 (DiGraph、拓扑扩展与候选注入)
 │   ├── rerank/                    # Cohere Rerank trait + client（mock 可测）
+│   ├── mcp/                       # MCP JSON-RPC 分发器（stdio / HTTP）
 │   ├── eval/                      # Recall / MRR / NDCG@k 检索指标
 │   ├── agent/                     # 辩证认知推演引擎与引文真实性核验器
-│   └── server/                    # Axum HTTP API：DTO/路由/检索·推演SSE·核验 handlers
+│   ├── server/                    # Axum HTTP API：DTO/路由/检索·推演SSE·核验 handlers
+│   ├── assets/                    # 内置静态资源
+│   └── retry.rs                   # 有界指数退避重试
 ├── evals/retrieval/               # gold queries.jsonl + BASELINE.md
-└── tests/                         # 10 个集成测试套件 (E2E / Store / API / HNSW / Graph)
+└── tests/                         # 11 个集成测试套件 (E2E / Store / API / HNSW / Graph / MCP)
 ```
 

@@ -2,7 +2,7 @@ use crate::agent::llm::{FallbackLlmClient, LlmClient};
 use crate::agent::prompt::build_rag_user_prompt_with_triples;
 use crate::agent::verifier::{CitationVerifier, VerificationReport};
 use crate::error::Result;
-use crate::graph::{GraphStore, ResolvedGraphChunk, union_graph_bonus};
+use crate::graph::{GraphStore, expand_with_graph};
 use crate::index::fulltext::FullTextIndex;
 use crate::index::hybrid::{HybridSearchCoordinator, HybridSearchResult};
 use crate::model::{DocumentChunk, VectorFilter};
@@ -106,27 +106,12 @@ impl DialecticalAgent {
         question: &str,
         top_k: usize,
     ) -> Vec<HybridSearchResult> {
-        let Some(graph) = self.graph.as_ref() else {
-            return fused;
-        };
-        let hits = graph.expand(question, 2);
-        let mut resolved = Vec::new();
-        for hit in &hits {
-            for r in &hit.source_refs {
-                for chunk in self.store.chunks_matching_ref(r).await {
-                    resolved.push(ResolvedGraphChunk {
-                        chunk,
-                        paths: hit.paths.clone(),
-                    });
-                }
-            }
-        }
         let final_k = if self.reranker.is_some() {
             None
         } else {
             Some(top_k)
         };
-        union_graph_bonus(fused, &resolved, final_k)
+        expand_with_graph(self.graph.as_deref(), &self.store, fused, question, final_k).await
     }
 
     fn graph_triples(&self, question: &str) -> Vec<String> {
