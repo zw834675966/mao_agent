@@ -36,12 +36,51 @@ pub struct AgentAnswer {
 
 /// Dialectical Reasoning Agent orchestrating hybrid retrieval, LLM synthesis, and citation verification.
 pub struct DialecticalAgent {
-    search_service: HybridSearchService,
+    search_service: Arc<HybridSearchService>,
     verifier: CitationVerifier,
     llm: Arc<dyn LlmClient>,
 }
 
 impl DialecticalAgent {
+    /// 直接基于已有检索服务与 LLM 客户端构造（最高效路径）
+    pub fn from_services(
+        search_service: Arc<HybridSearchService>,
+        llm: Arc<dyn LlmClient>,
+    ) -> Self {
+        Self {
+            search_service,
+            verifier: CitationVerifier::default(),
+            llm,
+        }
+    }
+
+    /// 基于已有检索服务、共享 reqwest::Client 及 LLM 配置构造
+    pub fn from_service_with_client(
+        search_service: Arc<HybridSearchService>,
+        base_url: Option<String>,
+        api_key: Option<String>,
+        model_name: Option<String>,
+        client: reqwest::Client,
+        fallback_counter: Option<Arc<AtomicU64>>,
+    ) -> Self {
+        let base_url = base_url
+            .unwrap_or_else(|| crate::vector::embedder::COHERE_COMPAT_BASE_URL.to_string())
+            .trim_end_matches('/')
+            .to_string();
+        let model_name = model_name
+            .unwrap_or_else(|| crate::vector::embedder::COHERE_CHAT_MODEL.to_string());
+        let mut fallback = FallbackLlmClient::from_api_key_with_client(
+            client,
+            base_url,
+            api_key,
+            model_name,
+        );
+        if let Some(counter) = fallback_counter {
+            fallback = fallback.with_fallback_counter(counter);
+        }
+        Self::from_services(search_service, Arc::new(fallback))
+    }
+
     pub fn new(
         store: Arc<VectorStore>,
         fulltext_index: Option<Arc<FullTextIndex>>,
@@ -70,33 +109,31 @@ impl DialecticalAgent {
         reranker: Option<Arc<dyn Reranker>>,
         fallback_counter: Option<Arc<AtomicU64>>,
     ) -> Self {
-        let base_url = base_url
-            .unwrap_or_else(|| crate::vector::embedder::COHERE_COMPAT_BASE_URL.to_string())
-            .trim_end_matches('/')
-            .to_string();
-        let model_name =
-            model_name.unwrap_or_else(|| crate::vector::embedder::COHERE_CHAT_MODEL.to_string());
-        let mut fallback = FallbackLlmClient::from_api_key(base_url, api_key, model_name);
-        if let Some(counter) = fallback_counter {
-            fallback = fallback.with_fallback_counter(counter);
-        }
-        let llm: Arc<dyn LlmClient> = Arc::new(fallback);
-        let search_service = HybridSearchService::new(
+        let search_service = Arc::new(HybridSearchService::new(
             store,
             fulltext_index,
             HybridSearchCoordinator::default(),
             None,
             reranker,
-        );
-        Self {
+        ));
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .unwrap_or_default();
+        Self::from_service_with_client(
             search_service,
-            verifier: CitationVerifier::default(),
-            llm,
-        }
+            base_url,
+            api_key,
+            model_name,
+            client,
+            fallback_counter,
+        )
     }
 
     pub fn with_graph(mut self, graph: Arc<GraphStore>) -> Self {
-        self.search_service.graph = Some(graph);
+        let mut s = (*self.search_service).clone();
+        s.graph = Some(graph);
+        self.search_service = Arc::new(s);
         self
     }
 
@@ -347,5 +384,40 @@ mod tests {
         );
         assert!(answer.content.contains("主要矛盾"));
         assert!(!answer.retrieved_chunks.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_dialectical_agent_from_services() {
+        let store = Arc::new(VectorStore::new_deterministic(128));
+        store.index_document(&sample_doc()).await.unwrap();
+
+        let search_service = Arc::new(HybridSearchService::new(
+            store,
+            None,
+            HybridSearchCoordinator::default(),
+            None,
+            None,
+        ));
+
+        let llm: Arc<dyn LlmClient> = Arc::new(FallbackLlmClient::from_api_key(
+            crate::vector::embedder::COHERE_COMPAT_BASE_URL.to_string(),
+            None,
+            crate::vector::embedder::COHERE_CHAT_MODEL.to_string(),
+        ));
+
+        let agent = DialecticalAgent::from_services(search_service, llm);
+        let answer = agent
+            .ask("抗日战争为什么是持久战？", 3, None)
+            .await
+            .unwrap();
+
+        assert!(!answer.content.is_empty());
+        assert!(answer.content.contains("调查研究"));
+        assert!(answer.content.contains("主要矛盾分析"));
+        assert!(answer.content.contains("论持久战"));
+        assert_eq!(answer.retrieved_chunks.len(), 1);
+        assert!(!answer.citation_reports.is_empty());
+        assert!(answer.citation_reports[0].is_verified);
+        assert!(answer.is_fully_grounded);
     }
 }
