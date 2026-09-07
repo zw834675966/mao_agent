@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod config;
 pub mod cors;
 pub mod dto;
 pub mod error;
@@ -20,6 +21,7 @@ use tower_http::trace::TraceLayer;
 use crate::index::HybridSearchCoordinator;
 use crate::rerank::Reranker;
 
+pub use self::config::ServerConfig;
 use self::auth::ApiAuth;
 use self::cors::CorsAllowlist;
 use self::request_id::RequestId;
@@ -114,6 +116,31 @@ where
     Ok(())
 }
 
+/// Serve the HTTP API from a pre-built `HybridSearchService` and a
+/// `ServerConfig` aggregate. This is the config-driven entry point.
+pub async fn serve_with_config(
+    search_service: Arc<crate::index::HybridSearchService>,
+    config: ServerConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let state = AppState::with_config(
+        search_service,
+        config.clone(),
+        metrics::HttpMetrics::new(),
+    );
+    let app = build_router_with_cors(state, config.cors);
+    tracing::info!("  GET  /live  /health");
+    tracing::info!("  GET  /metrics  /api/v1/metrics");
+    tracing::info!("  GET  /api/v1/health  /api/v1/stats");
+    tracing::info!("  POST /api/v1/search");
+    tracing::info!("  POST /api/v1/ask          (blocking JSON)");
+    tracing::info!("  POST /api/v1/ask/stream   (SSE)");
+    tracing::info!("  POST /api/v1/verify  (/citation/verify)");
+    serve_with_shutdown(app, config.addr, GracefulShutdown::wait()).await
+}
+
+/// Backward-compatible entry point: assembles a `ServerConfig` and
+/// `HybridSearchService` from positional arguments, then delegates to
+/// [`serve_with_config`].
 #[allow(clippy::too_many_arguments)]
 pub async fn serve(
     store: Arc<crate::vector::VectorStore>,
@@ -129,30 +156,23 @@ pub async fn serve(
     max_concurrent_asks: usize,
     graph: Option<std::sync::Arc<crate::graph::GraphStore>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut state = AppState::with_ops(
-        store,
-        tantivy,
-        hybrid,
-        reranker,
+    let config = ServerConfig {
+        addr,
+        cors,
+        api_token,
+        max_concurrent_asks,
         chat_base_url,
         chat_api_key,
         chat_model,
-        metrics::HttpMetrics::new(),
-        api_token,
-        max_concurrent_asks,
-    );
-    if let Some(g) = graph {
-        state = state.with_graph(g);
-    }
-    let app = build_router_with_cors(state, cors);
-    tracing::info!("  GET  /live  /health");
-    tracing::info!("  GET  /metrics  /api/v1/metrics");
-    tracing::info!("  GET  /api/v1/health  /api/v1/stats");
-    tracing::info!("  POST /api/v1/search");
-    tracing::info!("  POST /api/v1/ask          (blocking JSON)");
-    tracing::info!("  POST /api/v1/ask/stream   (SSE)");
-    tracing::info!("  POST /api/v1/verify  (/citation/verify)");
-    serve_with_shutdown(app, addr, GracefulShutdown::wait()).await
+    };
+    let search_service = Arc::new(crate::index::HybridSearchService::new(
+        store,
+        tantivy,
+        hybrid,
+        graph,
+        reranker,
+    ));
+    serve_with_config(search_service, config).await
 }
 
 #[cfg(test)]

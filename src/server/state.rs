@@ -5,6 +5,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use crate::graph::GraphStore;
 use crate::index::{FullTextIndex, HybridSearchCoordinator, HybridSearchService};
 use crate::rerank::Reranker;
+use crate::server::config::ServerConfig;
 use crate::server::error::{ApiError, ApiResult};
 use crate::server::metrics::HttpMetrics;
 use crate::vector::VectorStore;
@@ -83,6 +84,37 @@ impl AppState {
         )
     }
 
+    /// Construct `AppState` from a pre-built `HybridSearchService` and a
+    /// `ServerConfig` aggregate. This is the config-driven constructor.
+    pub fn with_config(
+        search_service: Arc<HybridSearchService>,
+        config: ServerConfig,
+        metrics: Arc<HttpMetrics>,
+    ) -> Self {
+        let limit = config.max_concurrent_asks.max(1);
+        let graph = search_service.graph.clone();
+        Self {
+            store: search_service.store.clone(),
+            tantivy: search_service.fulltext.clone(),
+            hybrid: search_service.coordinator.clone(),
+            reranker: search_service.reranker.clone(),
+            search_service,
+            chat_base_url: config.chat_base_url,
+            chat_api_key: config.chat_api_key,
+            chat_model: config.chat_model,
+            metrics,
+            api_token: config.api_token.and_then(|t| {
+                let t = t.trim().to_string();
+                if t.is_empty() { None } else { Some(t) }
+            }),
+            ask_semaphore: Arc::new(Semaphore::new(limit)),
+            graph,
+        }
+    }
+
+    /// Backward-compatible constructor: assembles a `ServerConfig` and
+    /// `HybridSearchService` from positional arguments, then delegates to
+    /// [`Self::with_config`].
     #[allow(clippy::too_many_arguments)]
     pub fn with_ops(
         store: Arc<VectorStore>,
@@ -96,32 +128,23 @@ impl AppState {
         api_token: Option<String>,
         max_concurrent_asks: usize,
     ) -> Self {
-        let limit = max_concurrent_asks.max(1);
-        let coordinator = Arc::new(hybrid);
-        let search_service = HybridSearchService {
-            store: store.clone(),
-            fulltext: tantivy.clone(),
-            coordinator: coordinator.clone(),
-            graph: None,
-            reranker: reranker.clone(),
-        };
-        Self {
-            store,
-            tantivy,
-            hybrid: coordinator,
-            reranker,
-            search_service: Arc::new(search_service),
+        let config = ServerConfig {
+            addr: ServerConfig::default().addr,
+            cors: ServerConfig::default().cors,
+            api_token,
+            max_concurrent_asks,
             chat_base_url,
             chat_api_key,
             chat_model,
-            metrics,
-            api_token: api_token.and_then(|t| {
-                let t = t.trim().to_string();
-                if t.is_empty() { None } else { Some(t) }
-            }),
-            ask_semaphore: Arc::new(Semaphore::new(limit)),
-            graph: None,
-        }
+        };
+        let search_service = HybridSearchService::new(
+            store,
+            tantivy,
+            hybrid,
+            None,
+            reranker,
+        );
+        Self::with_config(Arc::new(search_service), config, metrics)
     }
 
     pub fn with_graph(mut self, graph: Arc<GraphStore>) -> Self {
