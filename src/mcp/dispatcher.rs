@@ -6,22 +6,20 @@
 
 use std::sync::Arc;
 
-use crate::agent::{CitationVerifier, DialecticalAgent};
+use crate::agent::DialecticalAgent;
 use crate::corpus::Domain;
 use crate::graph::GraphStore;
 use crate::index::{FullTextIndex, HybridSearchService};
 use crate::mcp::types::{
     JsonRpcError, JsonRpcRequest, JsonRpcResponse, MCP_PROTOCOL_VERSION, McpCallToolResult,
     McpInitializeResult, McpServerCapabilities, McpServerInfo, McpToolsCapability,
-    QueryDialecticalArgs, SERVER_NAME, SERVER_VERSION, VerifyCitationArgs, list_all_tools,
+    QueryDialecticalArgs, SERVER_NAME, SERVER_VERSION, list_all_tools,
 };
 use crate::model::{HistoricalPeriod, VectorFilter};
 use crate::rerank::Reranker;
 use crate::vector::VectorStore;
 
 const MAX_QUERY_CHARS: usize = 4000;
-const MAX_QUOTE_CHARS: usize = 4000;
-const MAX_TITLE_CHARS: usize = 200;
 
 fn reject_if_too_long(
     label: &str,
@@ -287,68 +285,7 @@ impl McpDispatcher {
         &self,
         args_val: serde_json::Value,
     ) -> std::result::Result<McpCallToolResult, JsonRpcError> {
-        let args: VerifyCitationArgs = serde_json::from_value(args_val)
-            .map_err(|e| JsonRpcError::invalid_params(format!("Invalid arguments: {e}")))?;
-
-        if args.quote.trim().is_empty() {
-            return Err(JsonRpcError::invalid_params("quote must not be empty"));
-        }
-        if args.claimed_title.trim().is_empty() {
-            return Err(JsonRpcError::invalid_params(
-                "claimed_title must not be empty",
-            ));
-        }
-        reject_if_too_long("quote", &args.quote, MAX_QUOTE_CHARS)?;
-        reject_if_too_long("claimed_title", &args.claimed_title, MAX_TITLE_CHARS)?;
-
-        let min_confidence = args.min_confidence.unwrap_or(0.85).clamp(0.0, 1.0) as f32;
-
-        // Corpus is the only grounding source. Caller-supplied `context_chunks`
-        // cannot self-attest a quote (plan risk: 引文反查跨篇混淆).
-        let matching = self.store.chunks_matching_title(&args.claimed_title).await;
-        if matching.is_empty() {
-            let not_found_report = serde_json::json!({
-                "is_valid": false,
-                "confidence": 0.0,
-                "verdict": "DocNotFound",
-                "matched_segment": null,
-                "mismatch_reason": format!("Claimed document '{}' was not found in the local historical corpus", args.claimed_title),
-                "source_title": args.claimed_title,
-                "auto_retrieved": true,
-            });
-            let formatted = serde_json::to_string_pretty(&not_found_report)
-                .map_err(|e| JsonRpcError::internal_error(e.to_string()))?;
-            return Ok(McpCallToolResult::text(formatted));
-        }
-
-        let verifier = CitationVerifier::new(min_confidence, 6);
-        let report = verifier.verify_quote(&args.quote, &args.claimed_title, &matching);
-
-        let verdict = if report.is_verified {
-            if report.match_confidence >= 0.999 {
-                "ExactMatch"
-            } else {
-                "FuzzyMatch"
-            }
-        } else {
-            "UnverifiedOrFabricated"
-        };
-
-        let result_json = serde_json::json!({
-            "is_valid": report.is_verified,
-            "confidence": report.match_confidence,
-            "verdict": verdict,
-            "matched_segment": report.matched_snippet,
-            "matched_chunk_id": report.matched_chunk_id,
-            "warning": report.warning,
-            "source_title": report.claimed_doc_title,
-            "auto_retrieved": true,
-        });
-
-        let formatted = serde_json::to_string_pretty(&result_json)
-            .map_err(|e| JsonRpcError::internal_error(e.to_string()))?;
-
-        Ok(McpCallToolResult::text(formatted))
+        crate::mcp::tools::citation::execute_verify_historical_citation(&self.store, args_val).await
     }
 }
 
@@ -449,62 +386,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_mcp_citation_auto_retrieval_success() {
-        let dispatcher = create_test_dispatcher().await;
-        // Without passing context_chunks, automatically look up 《反对本本主义》
-        let req = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            id: Some(serde_json::json!(4)),
-            method: "tools/call".to_string(),
-            params: Some(serde_json::json!({
-                "name": "verify_historical_citation",
-                "arguments": {
-                    "quote": "没有调查，就没有发言权",
-                    "claimed_title": "反对本本主义"
-                }
-            })),
-        };
-        let resp = dispatcher
-            .handle_request(req)
-            .await
-            .expect("should return response");
-        assert!(resp.error.is_none());
-        let result = resp.result.expect("result should exist");
-        let text = result["content"][0]["text"].as_str().expect("text");
-        let report: serde_json::Value = serde_json::from_str(text).expect("parse report json");
-        assert_eq!(report["is_valid"], true);
-        assert_eq!(report["verdict"], "ExactMatch");
-        assert_eq!(report["auto_retrieved"], true);
-    }
-
-    #[tokio::test]
-    async fn test_mcp_citation_auto_retrieval_doc_not_found() {
-        let dispatcher = create_test_dispatcher().await;
-        let req = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            id: Some(serde_json::json!(5)),
-            method: "tools/call".to_string(),
-            params: Some(serde_json::json!({
-                "name": "verify_historical_citation",
-                "arguments": {
-                    "quote": "天地不仁，以万物为刍狗",
-                    "claimed_title": "道德经"
-                }
-            })),
-        };
-        let resp = dispatcher
-            .handle_request(req)
-            .await
-            .expect("should return response");
-        assert!(resp.error.is_none());
-        let result = resp.result.expect("result should exist");
-        let text = result["content"][0]["text"].as_str().expect("text");
-        let report: serde_json::Value = serde_json::from_str(text).expect("parse report json");
-        assert_eq!(report["is_valid"], false);
-        assert_eq!(report["verdict"], "DocNotFound");
-    }
-
-    #[tokio::test]
     async fn test_mcp_unknown_method_returns_32601() {
         let dispatcher = create_test_dispatcher().await;
         let req = JsonRpcRequest {
@@ -519,63 +400,6 @@ mod tests {
             .expect("should return response");
         let err = resp.error.expect("should be error");
         assert_eq!(err.code, -32601);
-    }
-
-    #[tokio::test]
-    async fn test_mcp_citation_rejects_self_attested_context_chunks() {
-        let dispatcher = create_test_dispatcher().await;
-        let req = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            id: Some(serde_json::json!(7)),
-            method: "tools/call".to_string(),
-            params: Some(serde_json::json!({
-                "name": "verify_historical_citation",
-                "arguments": {
-                    "quote": "这是调用方塞进对照正文的伪造引言。",
-                    "claimed_title": "反对本本主义",
-                    "context_chunks": ["这是调用方塞进对照正文的伪造引言。"]
-                }
-            })),
-        };
-        let resp = dispatcher
-            .handle_request(req)
-            .await
-            .expect("should return response");
-        assert!(resp.error.is_none());
-        let result = resp.result.expect("result");
-        let text = result["content"][0]["text"].as_str().expect("text");
-        let report: serde_json::Value = serde_json::from_str(text).expect("parse report json");
-        assert_eq!(report["is_valid"], false);
-        assert_eq!(report["verdict"], "UnverifiedOrFabricated");
-    }
-
-    #[tokio::test]
-    async fn test_mcp_citation_doc_not_found_ignores_context_chunks() {
-        let dispatcher = create_test_dispatcher().await;
-        let req = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            id: Some(serde_json::json!(8)),
-            method: "tools/call".to_string(),
-            params: Some(serde_json::json!({
-                "name": "verify_historical_citation",
-                "arguments": {
-                    "quote": "天地不仁，以万物为刍狗",
-                    "claimed_title": "道德经",
-                    "context_chunks": ["天地不仁，以万物为刍狗"]
-                }
-            })),
-        };
-        let resp = dispatcher
-            .handle_request(req)
-            .await
-            .expect("should return response");
-        assert!(resp.error.is_none());
-        let result = resp.result.expect("result");
-        let text = result["content"][0]["text"].as_str().expect("text");
-        let report: serde_json::Value = serde_json::from_str(text).expect("parse report json");
-        assert_eq!(report["is_valid"], false);
-        assert_eq!(report["verdict"], "DocNotFound");
-        assert_eq!(report["confidence"], 0.0);
     }
 
     #[tokio::test]
