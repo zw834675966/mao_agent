@@ -84,22 +84,33 @@ impl OnlineLlmClient {
         Self::with_retry(base_url, api_key, model_name, RetryPolicy::cohere_http())
     }
 
-    pub fn with_retry(
+    pub fn with_client_and_retry(
+        client: reqwest::Client,
         base_url: String,
         api_key: String,
         model_name: String,
         retry: RetryPolicy,
     ) -> Self {
         Self {
-            client: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(60))
-                .build()
-                .unwrap_or_default(),
+            client,
             base_url: base_url.trim_end_matches('/').to_string(),
             api_key,
             model_name,
             retry,
         }
+    }
+
+    pub fn with_retry(
+        base_url: String,
+        api_key: String,
+        model_name: String,
+        retry: RetryPolicy,
+    ) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .unwrap_or_default();
+        Self::with_client_and_retry(client, base_url, api_key, model_name, retry)
     }
 
     async fn generate_once(
@@ -230,12 +241,33 @@ pub struct FallbackLlmClient {
 }
 
 impl FallbackLlmClient {
-    pub fn from_api_key(base_url: String, api_key: Option<String>, model_name: String) -> Self {
-        let online = api_key.map(|key| OnlineLlmClient::new(base_url, key, model_name));
+    pub fn from_api_key_with_client(
+        client: reqwest::Client,
+        base_url: String,
+        api_key: Option<String>,
+        model_name: String,
+    ) -> Self {
+        let online = api_key.map(|key| {
+            OnlineLlmClient::with_client_and_retry(
+                client,
+                base_url,
+                key,
+                model_name,
+                RetryPolicy::cohere_http(),
+            )
+        });
         Self {
             online,
             fallback_counter: None,
         }
+    }
+
+    pub fn from_api_key(base_url: String, api_key: Option<String>, model_name: String) -> Self {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .unwrap_or_default();
+        Self::from_api_key_with_client(client, base_url, api_key, model_name)
     }
 
     pub fn from_online(online: Option<OnlineLlmClient>) -> Self {
@@ -340,6 +372,36 @@ mod tests {
         );
         let text = client.generate("q", "prompt", &[]).await.unwrap();
         assert_eq!(text, "ok-after-retry");
+    }
+
+    #[tokio::test]
+    async fn test_online_llm_client_with_custom_client() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "choices": [{"message": {"content": "custom-client-ok"}}]
+            })))
+            .mount(&server)
+            .await;
+
+        let custom_client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .unwrap();
+        let client = OnlineLlmClient::with_client_and_retry(
+            custom_client,
+            server.uri(),
+            "k".into(),
+            "m".into(),
+            RetryPolicy::fast_test(),
+        );
+        assert_eq!(client.base_url, server.uri().trim_end_matches('/'));
+        assert_eq!(client.api_key, "k");
+        assert_eq!(client.model_name, "m");
+
+        let text = client.generate("q", "prompt", &[]).await.unwrap();
+        assert_eq!(text, "custom-client-ok");
     }
 
     #[tokio::test]
