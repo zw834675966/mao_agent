@@ -27,7 +27,7 @@ pub use graph::{
 };
 pub use index::{
     FullTextIndex, FullTextSearchResult, HybridSearchCoordinator, HybridSearchResult,
-    JiebaTokenizer,
+    HybridSearchService, JiebaTokenizer,
 };
 pub use model::{
     Document, DocumentChunk, DocumentMetadata, HistoricalPeriod, VectorEntry, VectorFilter,
