@@ -233,11 +233,6 @@ pub struct DocumentChunk {
     pub raw_text: String,
     pub contextualized_text: String,
     pub section_path: Vec<String>,
-/// Parent-chunk context for Small-to-Big retrieval. When set, this chunk is a
-    /// "child" slice and `parent_text` holds the larger parent context (e.g. 800-1500
-    /// chars) that should be injected into the reasoning engine / verifier.
-    #[serde(default)]
-    pub parent_text: Option<String>,
 }
 
 /// Stored entry in the vector database with embedding and metadata.
@@ -505,7 +500,6 @@ mod tests {
             raw_text: "持久战".to_string(),
             contextualized_text: "持久战".to_string(),
             section_path: vec![],
-parent_text: None,
         };
 
         // Filter covering part of month: 1938-05-10 to 1938-05-15 (should overlap [1938-05-01, 1938-05-31])
@@ -541,7 +535,6 @@ parent_text: None,
             raw_text: "内容".to_string(),
             contextualized_text: "内容".to_string(),
             section_path: vec![],
-parent_text: None,
         };
         let filter = VectorFilter::new().with_date_range("1937-01-01", "1945-12-31");
         assert!(
@@ -573,7 +566,6 @@ parent_text: None,
             raw_text: "红军东征".to_string(),
             contextualized_text: "红军东征".to_string(),
             section_path: vec![],
-parent_text: None,
         };
 
         let filter_leap = VectorFilter::new().with_date_range("1936-02-01", "1936-02-29");
@@ -602,7 +594,6 @@ parent_text: None,
             raw_text: "x".to_string(),
             contextualized_text: "x".to_string(),
             section_path: vec![],
-parent_text: None,
         };
         // Singular says Agrarian, periods says WarOfResistance — periods wins.
         let mut f = VectorFilter::new().with_period(HistoricalPeriod::AgrarianRevolutionaryWar);
@@ -651,7 +642,6 @@ parent_text: None,
             raw_text: "夹具正文".to_string(),
             contextualized_text: "夹具正文".to_string(),
             section_path: vec![],
-parent_text: None,
         }
     }
 

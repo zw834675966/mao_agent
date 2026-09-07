@@ -20,7 +20,6 @@ pub fn resolve_graph_chunks(
                         .or_insert_with(|| ResolvedGraphChunk {
                             chunk,
                             paths: Vec::new(),
-                            hop: hit.hop,
                         });
                 for p in &hit.paths {
                     if !entry.paths.contains(p) {
@@ -37,33 +36,21 @@ pub fn resolve_graph_chunks(
 pub const GRAPH_BONUS_CAP: usize = 8;
 /// Tail slots reserved for graph-unique chunks when truncating to final top_k without rerank.
 pub const GRAPH_RESERVED: usize = 2;
-/// Graph RRF weight used for graph-unique chunks (comparable to dual RRF weights).
-pub const GRAPH_RRF_WEIGHT: f32 = 0.6;
 
-/// Compute a non-zero RRF-like score for a graph-unique chunk based on hop distance.
-/// Closer to the seed (lower hop) → higher score. Uses the same k-constant (60.0)
-/// as the dual RRF so graph hits can compete for front-page exposure.
-pub fn graph_rrf_score(hop: u8, k_constant: f32) -> f32 {
-    GRAPH_RRF_WEIGHT / (k_constant + hop as f32 + 1.0)
-}
-
-/// A corpus chunk already resolved from graph `source_refs`, with expander paths and hop distance.
+/// A corpus chunk already resolved from graph `source_refs`, with expander paths.
 #[derive(Debug, Clone)]
 pub struct ResolvedGraphChunk {
     pub chunk: DocumentChunk,
     pub paths: Vec<String>,
-    /// Minimum hop distance from seed entity (0 = seed, 1 = 1-hop, 2 = 2-hop).
-    pub hop: u8,
 }
 
-/// Union graph chunks into dual RRF results.
+/// Union graph chunks into dual RRF results without changing dual `rrf_score`s.
 ///
 /// Dual hits that also appear in `graph_chunks` keep their score and gain `graph_paths`.
-/// Graph-unique chunks receive a non-zero RRF score based on hop distance via
-/// [`graph_rrf_score`] (cap [`GRAPH_BONUS_CAP`]).
+/// Graph-unique chunks are appended with `rrf_score = 0.0` (cap [`GRAPH_BONUS_CAP`]).
 ///
-/// When `final_top_k` is `Some(k)`, dual + graph-unique chunks are merged and sorted by
-/// `rrf_score` descending, then truncated to `k` (Graph-RRF fusion).
+/// When `final_top_k` is `Some(k)`, apply reserved tail slots:
+/// `dual[..k-r] + bonus[..r]` where `r = min(GRAPH_RESERVED, bonus.len(), k)`.
 /// When `None`, return the full dual list plus bonus (pre-rerank pool).
 pub fn union_graph_bonus(
     dual: Vec<HybridSearchResult>,
@@ -106,7 +93,7 @@ pub fn union_graph_bonus(
         bonus_ids.insert(id.clone());
         bonus.push(HybridSearchResult {
             chunk_id: id,
-            rrf_score: graph_rrf_score(g.hop, 60.0),
+            rrf_score: 0.0,
             bm25_score: None,
             vector_score: None,
             rerank_score: None,
@@ -127,16 +114,11 @@ pub fn union_graph_bonus(
         }
         Some(0) => Vec::new(),
         Some(k) => {
-            // Graph-RRF: merge dual + graph-unique chunks, then sort by score so
-            // topologically-close graph hits can rank ahead of weak dual hits.
-            dual.extend(bonus);
-            dual.sort_by(|a, b| {
-                b.rrf_score
-                    .partial_cmp(&a.rrf_score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-            dual.truncate(k);
-            dual
+            let r = GRAPH_RESERVED.min(bonus.len()).min(k);
+            let dual_keep = k.saturating_sub(r).min(dual.len());
+            let mut out = dual.into_iter().take(dual_keep).collect::<Vec<_>>();
+            out.extend(bonus.into_iter().take(r));
+            out
         }
     };
 
@@ -169,7 +151,6 @@ pub async fn expand_with_graph(
                 resolved.push(ResolvedGraphChunk {
                     chunk,
                     paths: hit.paths.clone(),
-                    hop: hit.hop,
                 });
             }
         }
@@ -209,7 +190,6 @@ mod tests {
                 raw_text: id.to_string(),
                 contextualized_text: id.to_string(),
                 section_path: vec![],
-parent_text: None,
             },
         }
     }
@@ -267,7 +247,6 @@ parent_text: None,
             raw_text: "矛盾论全文".into(),
             contextualized_text: "矛盾论全文".into(),
             section_path: vec![],
-parent_text: None,
         };
         let chunk2 = DocumentChunk {
             chunk_id: "c2".into(),
@@ -286,7 +265,6 @@ parent_text: None,
             raw_text: "阿姆达尔定律".into(),
             contextualized_text: "阿姆达尔定律".into(),
             section_path: vec![],
-parent_text: None,
         };
         store.index_chunks(vec![chunk1, chunk2]).await.unwrap();
         let fused = vec![];

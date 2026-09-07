@@ -23,7 +23,7 @@ pub use corpus::{
 pub use error::{Result, VectorError};
 pub use graph::{
     Entity, GraphDocument, GraphExpandHit, GraphStore, Relationship, ResolvedGraphChunk, SourceRef,
-    expand_with_graph, graph_rrf_score, resolve_graph_chunks, union_graph_bonus,
+    expand_with_graph, resolve_graph_chunks, union_graph_bonus,
 };
 pub use index::{
     FullTextIndex, FullTextSearchResult, HybridSearchCoordinator, HybridSearchResult,

@@ -140,7 +140,6 @@ impl ChineseSemanticChunker {
                 raw_text,
                 contextualized_text,
                 section_path,
-parent_text: Some(doc.content.clone()),
             });
         }
 

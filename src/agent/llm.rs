@@ -378,7 +378,6 @@ mod tests {
             raw_text: "中日战争是持久战，最后的胜利是中国的。".into(),
             contextualized_text: "中日战争是持久战，最后的胜利是中国的。".into(),
             section_path: vec![],
-parent_text: None,
         };
         let text = client
             .generate("q", "prompt", std::slice::from_ref(&chunk))

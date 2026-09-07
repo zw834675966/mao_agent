@@ -140,7 +140,7 @@ async fn handle_search_inner(
             } else {
                 Vec::new()
             };
-            let fused = state.hybrid.fuse_adaptive(&req.query, vec_results, bm25_results, top_k * 2);
+            let fused = state.hybrid.fuse(vec_results, bm25_results, top_k * 2);
             let skip = req.no_rerank.unwrap_or(false);
             let final_k = if skip || state.reranker.is_none() {
                 Some(top_k)

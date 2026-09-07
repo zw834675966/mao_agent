@@ -238,7 +238,7 @@ impl McpDispatcher {
         };
 
         // 3. Hybrid RRF fusion
-        let fused = self.hybrid.fuse_adaptive(&args.query, vec_results, bm25_results, top_k * 2);
+        let fused = self.hybrid.fuse(vec_results, bm25_results, top_k * 2);
 
         // 4. Knowledge graph expansion
         let fused = expand_with_graph(

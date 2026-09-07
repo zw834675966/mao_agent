@@ -595,7 +595,7 @@ async fn search_hybrid(
     };
 
     let coordinator = mao_agent::index::HybridSearchCoordinator::default();
-    let fused = coordinator.fuse_adaptive(&args.query, vec_results, bm25_results, args.top_k * 2);
+    let fused = coordinator.fuse(vec_results, bm25_results, args.top_k * 2);
     let reranker = make_reranker(
         args.embedder.offline,
         args.no_rerank,
@@ -1184,7 +1184,7 @@ async fn retrieve_chunk_ids_for_eval(
                 Vec::new()
             };
             let coordinator = mao_agent::index::HybridSearchCoordinator::default();
-            let fused = coordinator.fuse_adaptive(query, vec_results, bm25_results, k * 2);
+            let fused = coordinator.fuse(vec_results, bm25_results, k * 2);
             let hybrid = mao_agent::rerank_or_fallback(fused, reranker, query, k).await;
             Ok(hybrid.into_iter().map(|r| r.chunk_id).collect())
         }

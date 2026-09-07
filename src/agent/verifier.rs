@@ -215,7 +215,6 @@ mod tests {
             raw_text: raw_text.to_string(),
             contextualized_text: raw_text.to_string(),
             section_path: vec![],
-parent_text: None,
         }
     }
 

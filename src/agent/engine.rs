@@ -137,7 +137,7 @@ impl DialecticalAgent {
             };
             let fused = self
                 .hybrid_coordinator
-                .fuse_adaptive(question, vec_results, bm25_results, top_k * 2);
+                .fuse(vec_results, bm25_results, top_k * 2);
             let fused = expand_with_graph(
                 self.graph.as_deref(),
                 &self.store,
@@ -186,15 +186,8 @@ impl DialecticalAgent {
         // 2. Build prompt with evidence chunks
         let context_texts: Vec<String> = retrieved_chunks
             .iter()
-            .map(|c| {
-            // Small-to-Big: prefer the parent context when available so cross-paragraph
-            // arguments aren't truncated at slice boundaries.
-            c.parent_text
-                .as_ref()
-                .unwrap_or(&c.contextualized_text)
-                .clone()
-        })
-        .collect();
+            .map(|c| c.contextualized_text.clone())
+            .collect();
         let triples = self.graph_triples(question);
         let user_prompt = build_rag_user_prompt_with_triples(question, &context_texts, &triples);
 
