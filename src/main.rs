@@ -576,52 +576,49 @@ async fn search_hybrid(
     let start = std::time::Instant::now();
     let embedder = get_embedder(&args.embedder, Some(&args.index_file))?;
     let store = match load_store_interactive(&args.index_file, embedder)? {
-        Some(s) => s,
+        Some(s) => Arc::new(s),
         None => return Ok(()),
     };
-    let vec_results = store.search(&args.query, args.top_k * 2, filter).await?;
 
-    let bm25_results = if args.tantivy_dir.exists() {
-        let ft_index = mao_agent::index::FullTextIndex::new_in_dir(&args.tantivy_dir)?;
-        match ft_index.search(&args.query, args.top_k * 2, filter) {
-            Ok(results) => results,
+    let tantivy = if args.tantivy_dir.exists() {
+        match mao_agent::index::FullTextIndex::new_in_dir(&args.tantivy_dir) {
+            Ok(idx) => Some(Arc::new(idx)),
             Err(e) => {
                 tracing::warn!("BM25 search failed: {e}, continuing with vector-only results.");
-                Vec::new()
+                None
             }
         }
     } else {
-        Vec::new()
+        None
     };
 
-    let coordinator = mao_agent::index::HybridSearchCoordinator::default();
-    let fused = coordinator.fuse(vec_results, bm25_results, args.top_k * 2);
+    let graph = try_load_graph(&args.graph_file).map(Arc::new);
     let reranker = make_reranker(
         args.embedder.offline,
         args.no_rerank,
         args.rerank_model.clone(),
         args.embedder.embed_api_key.as_deref(),
     );
-    let graph = try_load_graph(&args.graph_file);
-    let final_k = if reranker.is_some() { None } else { Some(args.top_k) };
-    let fused = mao_agent::expand_with_graph(
-        graph.as_ref(),
-        &store,
-        fused,
-        &args.query,
-        final_k,
-    )
-    .await;
+
+    let service = mao_agent::index::HybridSearchService::new(
+        store,
+        tantivy,
+        Default::default(),
+        graph,
+        reranker,
+    );
+
     let rerank_start = std::time::Instant::now();
-    let hybrid_results =
-        mao_agent::rerank_or_fallback(fused, reranker.as_deref(), &args.query, args.top_k).await;
+    let hybrid_results = service
+        .search_hybrid(&args.query, args.top_k, filter, args.no_rerank)
+        .await?;
     let duration = start.elapsed();
     println!(
         "⚡ 双路混合 (BM25 + 向量 RRF) 检索耗时: {:.2?}，融合召回 {} 条结果\n",
         duration,
         hybrid_results.len()
     );
-    if reranker.is_some() {
+    if service.reranker.is_some() {
         println!("⚡ Rerank 耗时: {:.2?}\n", rerank_start.elapsed());
     }
 
@@ -1143,49 +1140,43 @@ fn bm25_query_text(query: &str) -> String {
 
 async fn retrieve_chunk_ids_for_eval(
     args: &EvalRetrievalArgs,
-    store: &VectorStore,
-    ft_index: Option<&mao_agent::index::FullTextIndex>,
+    store: Arc<VectorStore>,
+    ft_index: Option<Arc<mao_agent::index::FullTextIndex>>,
     query: &str,
     filter: Option<&VectorFilter>,
-    reranker: Option<&dyn mao_agent::Reranker>,
+    reranker: Option<Arc<dyn mao_agent::Reranker>>,
 ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let k = args.k;
     let force_brute = args.force_brute;
     let bm25_q = bm25_query_text(query);
 
+    let service = mao_agent::index::HybridSearchService::new(
+        store.clone(),
+        ft_index.clone(),
+        Default::default(),
+        None,
+        reranker.clone(),
+    );
+
     match args.mode.as_str() {
         "bm25" => {
-            let Some(ft) = ft_index else {
-                return Err("BM25 mode requires tantivy_dir index".into());
-            };
-            let results = ft.search(&bm25_q, k, filter)?;
+            let results = service.search_bm25(&bm25_q, k, filter)?;
             Ok(results.into_iter().map(|r| r.chunk_id).collect())
         }
         "vector" => {
-            let results = store
-                .search_with_force_brute(query, k, filter, force_brute)
-                .await?;
+            let results = if force_brute {
+                store
+                    .search_with_force_brute(query, k, filter, true)
+                    .await?
+            } else {
+                service.search_vector(query, k, filter).await?
+            };
             Ok(results.into_iter().map(|r| r.chunk_id).collect())
         }
         _ => {
-            // hybrid: fuse top_k*2 then optional rerank → top_k
-            let vec_results = store
-                .search_with_force_brute(query, k * 2, filter, force_brute)
+            let hybrid = service
+                .search_hybrid(query, k, filter, args.no_rerank)
                 .await?;
-            let bm25_results = if let Some(ft) = ft_index {
-                match ft.search(&bm25_q, k * 2, filter) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        tracing::warn!("BM25 search failed during eval: {e}");
-                        Vec::new()
-                    }
-                }
-            } else {
-                Vec::new()
-            };
-            let coordinator = mao_agent::index::HybridSearchCoordinator::default();
-            let fused = coordinator.fuse(vec_results, bm25_results, k * 2);
-            let hybrid = mao_agent::rerank_or_fallback(fused, reranker, query, k).await;
             Ok(hybrid.into_iter().map(|r| r.chunk_id).collect())
         }
     }
@@ -1214,14 +1205,14 @@ async fn handle_eval_retrieval(args: &EvalRetrievalArgs) -> Result<(), Box<dyn s
         std::process::exit(1);
     }
     let store = match load_store_interactive(&args.index_file, embedder)? {
-        Some(s) => s,
+        Some(s) => Arc::new(s),
         None => std::process::exit(1),
     };
 
     let ft_index = if args.tantivy_dir.exists() {
-        Some(mao_agent::index::FullTextIndex::new_in_dir(
+        Some(Arc::new(mao_agent::index::FullTextIndex::new_in_dir(
             &args.tantivy_dir,
-        )?)
+        )?))
     } else if args.mode == "bm25" || args.mode == "hybrid" {
         eprintln!(
             "❌ Tantivy 索引目录未找到: {}（mode={} 需要 BM25）",
@@ -1250,11 +1241,11 @@ async fn handle_eval_retrieval(args: &EvalRetrievalArgs) -> Result<(), Box<dyn s
         let filter = eval_filter_from_query(&gq.filter);
         let retrieved = retrieve_chunk_ids_for_eval(
             args,
-            &store,
-            ft_index.as_ref(),
+            store.clone(),
+            ft_index.clone(),
             &gq.query,
             filter.as_ref(),
-            reranker.as_deref(),
+            reranker.clone(),
         )
         .await?;
 
