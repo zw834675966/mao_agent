@@ -257,12 +257,17 @@ impl VectorStore {
             std::fs::create_dir_all(parent)?;
         }
 
-        let index_guard = self.index.read().await;
-        let identity = SnapshotIdentity {
-            model: self.embedder.model_name().to_string(),
-            dimension: index_guard.dimension(),
-        };
-        let encoded = persist::encode_snapshot(&identity, &index_guard)?;
+        // 限制读锁范围：仅在内存编码期间持有读锁，完成后立即释放锁
+        let encoded = {
+            let index_guard = self.index.read().await;
+            let identity = SnapshotIdentity {
+                model: self.embedder.model_name().to_string(),
+                dimension: index_guard.dimension(),
+            };
+            persist::encode_snapshot(&identity, &index_guard)?
+        }; // index_guard 在此被立即 Drop，释放读锁
+
+        // 磁盘原子写入与元数据落盘在锁作用域外执行，不阻塞并发搜索与写入
         persist::atomic_replace(target_path, &encoded)?;
 
         info!(
