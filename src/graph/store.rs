@@ -24,6 +24,17 @@ struct GraphFile {
     graph: DiGraph<Entity, Relationship>,
 }
 
+/// 8-byte magic prefix identifying a self-describing graph snapshot.
+const MAGIC: &[u8; 8] = b"MAOGS01\0";
+
+/// Self-describing metadata header stored before the graph body.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct GraphSnapshotIdentity {
+    pub version: u32,
+    pub node_count: usize,
+    pub edge_count: usize,
+}
+
 /// In-memory directed knowledge graph. Tokenizer is rebuilt on load (not in the snapshot).
 pub struct GraphStore {
     graph: DiGraph<Entity, Relationship>,
@@ -73,16 +84,53 @@ impl GraphStore {
         let file = GraphFile {
             graph: self.graph.clone(),
         };
-        let bytes =
+        let identity = GraphSnapshotIdentity {
+            version: 1,
+            node_count: self.graph.node_count(),
+            edge_count: self.graph.edge_count(),
+        };
+        let header =
+            bincode::serialize(&identity).map_err(|e| VectorError::Serialization(e.to_string()))?;
+        let body =
             bincode::serialize(&file).map_err(|e| VectorError::Serialization(e.to_string()))?;
+        let header_len = u32::try_from(header.len())
+            .map_err(|_| VectorError::Serialization("graph header exceeds u32 length".into()))?;
+
+        let mut bytes = Vec::with_capacity(MAGIC.len() + 4 + header.len() + body.len());
+        bytes.extend_from_slice(MAGIC);
+        bytes.extend_from_slice(&header_len.to_le_bytes());
+        bytes.extend_from_slice(&header);
+        bytes.extend_from_slice(&body);
         atomic_replace(path, &bytes)
     }
 
     pub fn load_from_file(path: &Path) -> Result<Self> {
         let bytes = std::fs::read(path)?;
-        let file: GraphFile = bincode::deserialize(&bytes)
-            .map_err(|e| VectorError::Deserialization(e.to_string()))?;
-        Ok(Self::from_graph(file.graph))
+        if let Some(rest) = bytes.strip_prefix(MAGIC) {
+            if rest.len() < 4 {
+                return Err(VectorError::IndexCorrupted(
+                    "truncated graph identity header".into(),
+                ));
+            }
+            let header_len = u32::from_le_bytes([rest[0], rest[1], rest[2], rest[3]]) as usize;
+            let rest = &rest[4..];
+            if rest.len() < header_len {
+                return Err(VectorError::IndexCorrupted(format!(
+                    "graph header length {header_len} exceeds remaining {} bytes",
+                    rest.len()
+                )));
+            }
+            let _identity: GraphSnapshotIdentity = bincode::deserialize(&rest[..header_len])
+                .map_err(|e| VectorError::Deserialization(e.to_string()))?;
+            let file: GraphFile = bincode::deserialize(&rest[header_len..])
+                .map_err(|e| VectorError::Deserialization(e.to_string()))?;
+            Ok(Self::from_graph(file.graph))
+        } else {
+            // 向后兼容：加载无魔数头的旧版 GraphFile 快照
+            let file: GraphFile = bincode::deserialize(&bytes)
+                .map_err(|e| VectorError::Deserialization(e.to_string()))?;
+            Ok(Self::from_graph(file.graph))
+        }
     }
 
     fn from_graph(graph: DiGraph<Entity, Relationship>) -> Self {
@@ -237,5 +285,82 @@ mod tests {
             "Principal Contradiction"
         ));
         assert!(!alias_matches("主要矛盾", "主要矛盾x"));
+    }
+
+    fn test_store() -> GraphStore {
+        let doc = GraphDocument {
+            entities: vec![
+                Entity {
+                    id: "ent:a".into(),
+                    name: "甲".into(),
+                    aliases: vec!["A".into()],
+                    domain: "test".into(),
+                    source_refs: vec![],
+                },
+                Entity {
+                    id: "ent:b".into(),
+                    name: "乙".into(),
+                    aliases: vec!["B".into()],
+                    domain: "test".into(),
+                    source_refs: vec![],
+                },
+            ],
+            relationships: vec![Relationship {
+                id: "rel:ab".into(),
+                source: "ent:a".into(),
+                target: "ent:b".into(),
+                rel_type: "links".into(),
+                weight: 1.0,
+                source_refs: vec![],
+            }],
+        };
+        GraphStore::from_document(doc)
+    }
+
+    #[test]
+    fn test_graph_save_and_load_with_magic_header() {
+        let store = test_store();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("graph_magic.bin");
+        store.save_to_file(&path).unwrap();
+
+        let raw = std::fs::read(&path).unwrap();
+        assert!(raw.starts_with(MAGIC));
+
+        let loaded = GraphStore::load_from_file(&path).unwrap();
+        assert_eq!(loaded.entity_count(), store.entity_count());
+        assert_eq!(loaded.edge_count(), store.edge_count());
+    }
+
+    #[test]
+    fn test_graph_load_legacy_unheadered_snapshot() {
+        let store = test_store();
+        let file = GraphFile {
+            graph: store.graph.clone(),
+        };
+        let legacy = bincode::serialize(&file).unwrap();
+        assert!(!legacy.starts_with(MAGIC));
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("graph_legacy.bin");
+        std::fs::write(&path, &legacy).unwrap();
+
+        let loaded = GraphStore::load_from_file(&path).unwrap();
+        assert_eq!(loaded.entity_count(), store.entity_count());
+        assert_eq!(loaded.edge_count(), store.edge_count());
+    }
+
+    #[test]
+    fn test_graph_load_truncated_corrupted_header() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("graph_truncated.bin");
+        // MAGIC prefix present but header is truncated (no 4-byte length follows).
+        std::fs::write(&path, MAGIC).unwrap();
+
+        match GraphStore::load_from_file(&path) {
+            Err(VectorError::IndexCorrupted(_)) => {}
+            Err(e) => panic!("expected IndexCorrupted, got {e:?}"),
+            Ok(_) => panic!("expected IndexCorrupted, got Ok"),
+        }
     }
 }
