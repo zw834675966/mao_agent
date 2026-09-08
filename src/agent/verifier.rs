@@ -115,17 +115,27 @@ impl CitationVerifier {
 
             // 2. Sliding window Fuzzy Match (equal-length Jaro-Winkler)
             let quote_len = norm_quote.chars().count();
-            let chunk_chars: Vec<char> = norm_chunk_text.chars().collect();
+            let char_indices: Vec<usize> =
+                norm_chunk_text.char_indices().map(|(idx, _)| idx).collect();
+            let num_chars = char_indices.len();
 
-            if chunk_chars.len() >= quote_len {
-                for window in chunk_chars.windows(quote_len) {
-                    let window_str: String = window.iter().collect();
-                    let sim = jaro_winkler(&norm_quote, &window_str) as f32;
+            if num_chars >= quote_len {
+                for start_char in 0..=(num_chars - quote_len) {
+                    let start_byte = char_indices[start_char];
+                    let end_byte = if start_char + quote_len < num_chars {
+                        char_indices[start_char + quote_len]
+                    } else {
+                        norm_chunk_text.len()
+                    };
+                    // Zero-copy borrow of the UTF-8 character-boundary slice for Jaro-Winkler.
+                    let window_slice = &norm_chunk_text[start_byte..end_byte];
+                    let sim = jaro_winkler(&norm_quote, window_slice) as f32;
                     if sim > best_confidence {
                         best_confidence = sim;
                         best_chunk_id = Some(chunk.chunk_id.clone());
                         best_snippet = Some(chunk.raw_text.clone());
-                        best_window = Some(window_str);
+                        // Materialize the String only when a better window is found.
+                        best_window = Some(window_slice.to_string());
                     }
                 }
             }
