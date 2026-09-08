@@ -1,3 +1,4 @@
+use mao_agent::VectorError;
 use mao_agent::graph::{GraphDocument, GraphStore};
 
 const FIXTURE: &str = r#"
@@ -115,4 +116,34 @@ fn from_document_empty_is_ok() {
     let store = GraphStore::from_document(GraphDocument::default());
     assert_eq!(store.entity_count(), 0);
     assert!(store.expand("主要矛盾", 2).is_empty());
+}
+
+// ── C4: graph-load hard-error regression tests ──
+
+#[test]
+fn test_graph_load_corrupted_file_returns_hard_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("corrupted.bin");
+    // Write the MAGIC prefix followed by garbage to trigger deserialization failure.
+    let mut bytes: Vec<u8> = vec![];
+    bytes.extend_from_slice(b"MAOGS01\0"); // 8-byte MAGIC
+    bytes.extend_from_slice(&42u32.to_le_bytes()); // header_len = 42 (bogus)
+    bytes.extend_from_slice(&[0xFFu8; 64]); // garbage beyond header_len
+    std::fs::write(&path, &bytes).unwrap();
+
+    match GraphStore::load_from_file(&path) {
+        Err(VectorError::IndexCorrupted(_)) | Err(VectorError::Deserialization(_)) => {}
+        Err(e) => panic!("expected IndexCorrupted or Deserialization, got {e}"),
+        Ok(_) => panic!("expected IndexCorrupted or Deserialization, got Ok"),
+    }
+}
+
+#[test]
+fn test_graph_load_missing_file_returns_io_error() {
+    let path = std::path::Path::new("__this_file_does_not_exist_42a7f3c1__.bin");
+    match GraphStore::load_from_file(path) {
+        Err(VectorError::Io(_)) => {}
+        Err(e) => panic!("expected Io error, got {e}"),
+        Ok(_) => panic!("expected Io error, got Ok"),
+    }
 }

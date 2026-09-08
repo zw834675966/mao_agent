@@ -390,21 +390,24 @@ fn handle_ingest_graph(args: &IngestGraphArgs) -> Result<(), Box<dyn std::error:
     Ok(())
 }
 
-fn try_load_graph(path: &Path) -> Option<mao_agent::GraphStore> {
+fn try_load_graph(
+    path: &Path,
+) -> Result<Option<mao_agent::GraphStore>, Box<dyn std::error::Error>> {
     if !path.exists() {
         tracing::debug!(path = %path.display(), "graph file missing; dual-only retrieval");
         eprintln!(
             "ℹ️ 知识图谱文件缺失 ({}): 仅双路 BM25+Vector 检索 (dual-only)",
             path.display()
         );
-        return None;
+        return Ok(None);
     }
     match mao_agent::GraphStore::load_from_file(path) {
-        Ok(g) => Some(g),
-        Err(e) => {
-            tracing::warn!("failed to load graph {}: {e}", path.display());
-            None
-        }
+        Ok(g) => Ok(Some(g)),
+        Err(e) => Err(format!(
+            "知识图谱文件存在但已损坏 ({}), 拒绝静默降级: {e}",
+            path.display()
+        )
+        .into()),
     }
 }
 
@@ -592,7 +595,7 @@ async fn search_hybrid(
         None
     };
 
-    let graph = try_load_graph(&args.graph_file).map(Arc::new);
+    let graph = try_load_graph(&args.graph_file)?.map(Arc::new);
     let reranker = make_reranker(
         args.embedder.offline,
         args.no_rerank,
@@ -855,7 +858,7 @@ async fn handle_ask(args: &AskArgs) -> Result<(), Box<dyn std::error::Error>> {
         Some(args.model.clone()),
         reranker,
     );
-    if let Some(graph) = try_load_graph(&args.graph_file) {
+    if let Some(graph) = try_load_graph(&args.graph_file)? {
         agent = agent.with_graph(std::sync::Arc::new(graph));
     }
 
@@ -910,7 +913,7 @@ async fn handle_mcp(args: &McpArgs) -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
-    let graph = try_load_graph(&args.graph_file).map(Arc::new);
+    let graph = try_load_graph(&args.graph_file)?.map(Arc::new);
 
     let reranker = make_reranker(
         args.embedder.offline,
@@ -1066,7 +1069,7 @@ async fn handle_serve(args: &ServeArgs) -> Result<(), Box<dyn std::error::Error>
         cors,
         api_token,
         max_concurrent_asks,
-        try_load_graph(&args.graph_file).map(std::sync::Arc::new),
+        try_load_graph(&args.graph_file)?.map(std::sync::Arc::new),
     )
     .await?;
     Ok(())
