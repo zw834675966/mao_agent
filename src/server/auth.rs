@@ -4,6 +4,7 @@ use axum::extract::{Request, State};
 use axum::http::StatusCode;
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
+use sha2::{Digest, Sha256};
 
 use crate::server::state::AppState;
 
@@ -22,6 +23,20 @@ impl ApiAuth {
                 | "/api/v1/metrics"
                 | "/api/v1/stats"
         )
+    }
+
+    /// Constant-time token verification using SHA-256 digests and bitwise XOR accumulation.
+    ///
+    /// Hashing both inputs first mitigates length-extension/length-leaking timing channels,
+    /// and bitwise XOR over the fixed 32-byte digest prevents short-circuit early exit.
+    pub fn constant_time_eq_token(a: &str, b: &str) -> bool {
+        let hash_a = Sha256::digest(a.as_bytes());
+        let hash_b = Sha256::digest(b.as_bytes());
+        let mut diff = 0u8;
+        for (x, y) in hash_a.iter().zip(hash_b.iter()) {
+            diff |= x ^ y;
+        }
+        diff == 0
     }
 
     fn extract_bearer(req: &Request) -> Option<&str> {
@@ -43,7 +58,7 @@ impl ApiAuth {
             return next.run(req).await;
         }
         match Self::extract_bearer(&req) {
-            Some(got) if got == expected => next.run(req).await,
+            Some(got) if Self::constant_time_eq_token(got, expected) => next.run(req).await,
             _ => (
                 StatusCode::UNAUTHORIZED,
                 axum::Json(serde_json::json!({
@@ -66,5 +81,35 @@ mod tests {
         assert!(ApiAuth::is_public_path("/health"));
         assert!(!ApiAuth::is_public_path("/api/v1/search"));
         assert!(!ApiAuth::is_public_path("/api/v1/ask"));
+    }
+
+    #[test]
+    fn test_constant_time_eq_token_matching() {
+        assert!(ApiAuth::constant_time_eq_token(
+            "secret-token",
+            "secret-token"
+        ));
+    }
+
+    #[test]
+    fn test_constant_time_eq_token_mismatch() {
+        assert!(!ApiAuth::constant_time_eq_token(
+            "secret-token",
+            "secret-tokEn"
+        ));
+    }
+
+    #[test]
+    fn test_constant_time_eq_token_different_length() {
+        assert!(!ApiAuth::constant_time_eq_token(
+            "short",
+            "much-longer-token"
+        ));
+    }
+
+    #[test]
+    fn test_constant_time_eq_token_empty() {
+        assert!(ApiAuth::constant_time_eq_token("", ""));
+        assert!(!ApiAuth::constant_time_eq_token("", "non-empty"));
     }
 }
