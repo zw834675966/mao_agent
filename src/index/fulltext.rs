@@ -380,21 +380,84 @@ impl FullTextIndex {
                 .and_then(|v| v.as_str())
                 .unwrap_or_default();
 
-            if let Ok(chunk) = serde_json::from_str::<DocumentChunk>(json_str) {
-                // Check remaining predicate filters (tags, date range, etc.)
-                if let Some(f) = filter
-                    && !f.matches(&chunk)
-                {
-                    continue;
-                }
+            let chunk = match serde_json::from_str::<DocumentChunk>(json_str) {
+                Ok(c) => c,
+                Err(err) => {
+                    tracing::warn!(
+                        chunk_id = %chunk_id,
+                        error = %err,
+                        "json_chunk missing or corrupted; falling back to reconstructed DocumentChunk from index fields"
+                    );
+                    let doc_id = retrieved_doc
+                        .get_first(self.f_doc_id)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    let doc_title = retrieved_doc
+                        .get_first(self.f_title)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    let period_str = retrieved_doc
+                        .get_first(self.f_period)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default();
+                    let period = crate::model::HistoricalPeriod::from_str_or_date(period_str);
+                    let date = retrieved_doc
+                        .get_first(self.f_date)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    let volume = retrieved_doc
+                        .get_first(self.f_volume)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    let category = retrieved_doc
+                        .get_first(self.f_category)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    let body = retrieved_doc
+                        .get_first(self.f_body)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
 
-                results.push(FullTextSearchResult {
-                    chunk_id,
-                    score,
-                    rank: rank + 1,
-                    chunk,
-                });
+                    DocumentChunk {
+                        chunk_id: chunk_id.clone(),
+                        doc_id,
+                        doc_title,
+                        author: String::new(),
+                        period,
+                        date,
+                        volume,
+                        category,
+                        domain: crate::corpus::Domain::Any,
+                        tags: Vec::new(),
+                        chunk_index: 0,
+                        total_chunks: 1,
+                        char_count: body.chars().count(),
+                        raw_text: body.clone(),
+                        contextualized_text: body,
+                        section_path: Vec::new(),
+                    }
+                }
+            };
+
+            // Check remaining predicate filters (tags, date range, etc.)
+            if let Some(f) = filter
+                && !f.matches(&chunk)
+            {
+                continue;
             }
+
+            results.push(FullTextSearchResult {
+                chunk_id,
+                score,
+                rank: rank + 1,
+                chunk,
+            });
         }
 
         debug!("BM25 FullText search retrieved {} results", results.len());
@@ -580,5 +643,104 @@ mod tests {
         ]);
         let both = index.search("法则 OR 持久战", 5, Some(&multi)).unwrap();
         assert!(!both.is_empty());
+    }
+
+    /// Normal path: valid json_chunk → parse succeeds → original chunk returned.
+    #[test]
+    fn test_fulltext_search_normal_json_chunk() {
+        let index = FullTextIndex::new_in_ram().unwrap();
+        let chunk = dummy_chunk(
+            "c_normal",
+            "论持久战",
+            HistoricalPeriod::WarOfResistance,
+            "中日战争是持久战，战略防御、战略相持、战略反攻三个阶段。",
+        );
+        index.insert_batch(std::slice::from_ref(&chunk)).unwrap();
+
+        let results = index.search("持久战", 5, None).unwrap();
+        assert!(!results.is_empty());
+        let r = &results[0];
+        assert_eq!(r.chunk_id, "c_normal");
+        assert_eq!(r.chunk, chunk);
+    }
+
+    /// Empty json_chunk: must not drop the hit; fallback reconstruct from stored fields.
+    #[test]
+    fn test_fulltext_search_empty_json_chunk_fallback() {
+        let index = FullTextIndex::new_in_ram().unwrap();
+
+        // Insert a raw Tantivy document with empty json_chunk to simulate corruption.
+        {
+            let mut writer = index.writer.lock().unwrap();
+            let mut doc = TantivyDocument::default();
+            doc.add_text(index.f_chunk_id, "fallback_empty");
+            doc.add_text(index.f_doc_id, "doc_fallback_empty");
+            doc.add_text(index.f_title, "测试标题");
+            doc.add_text(index.f_period, HistoricalPeriod::WarOfResistance.as_str());
+            doc.add_text(index.f_date, "1938-05");
+            doc.add_text(index.f_volume, "第二卷");
+            doc.add_text(index.f_category, "军事");
+            doc.add_text(index.f_body, "中日战争是持久战");
+            doc.add_text(index.f_json_chunk, "");
+            writer.add_document(doc).unwrap();
+            writer.commit().unwrap();
+        }
+        index.reader.reload().unwrap();
+
+        let results = index.search("持久战", 5, None).unwrap();
+        assert!(
+            !results.is_empty(),
+            "empty json_chunk must not drop the hit; fallback reconstruction expected"
+        );
+        let r = &results[0];
+        assert_eq!(r.chunk_id, "fallback_empty");
+        assert_eq!(r.chunk.doc_id, "doc_fallback_empty");
+        assert_eq!(r.chunk.doc_title, "测试标题");
+        assert_eq!(r.chunk.period, HistoricalPeriod::WarOfResistance);
+        assert_eq!(r.chunk.date, "1938-05");
+        assert_eq!(r.chunk.volume, "第二卷");
+        assert_eq!(r.chunk.category, "军事");
+        assert_eq!(r.chunk.raw_text, "中日战争是持久战");
+        assert_eq!(r.chunk.contextualized_text, "中日战争是持久战");
+        assert_eq!(r.chunk.chunk_index, 0);
+        assert_eq!(r.chunk.total_chunks, 1);
+        assert!(r.chunk.tags.is_empty());
+    }
+
+    /// Corrupted json_chunk: must not panic, not drop the hit; fallback reconstruction.
+    #[test]
+    fn test_fulltext_search_corrupted_json_chunk_fallback() {
+        let index = FullTextIndex::new_in_ram().unwrap();
+
+        // Insert a raw Tantivy document with a syntactically broken json_chunk.
+        {
+            let mut writer = index.writer.lock().unwrap();
+            let mut doc = TantivyDocument::default();
+            doc.add_text(index.f_chunk_id, "fallback_corrupt");
+            doc.add_text(index.f_doc_id, "doc_fallback_corrupt");
+            doc.add_text(index.f_title, "论持久战");
+            doc.add_text(index.f_period, HistoricalPeriod::WarOfResistance.as_str());
+            doc.add_text(index.f_date, "1938-05");
+            doc.add_text(index.f_volume, "第二卷");
+            doc.add_text(index.f_category, "军事");
+            doc.add_text(index.f_body, "中日战争是持久战，三个阶段。");
+            doc.add_text(index.f_json_chunk, "{bad_json_chunk");
+            writer.add_document(doc).unwrap();
+            writer.commit().unwrap();
+        }
+        index.reader.reload().unwrap();
+
+        let results = index.search("持久战", 5, None).unwrap();
+        assert!(
+            !results.is_empty(),
+            "corrupted json_chunk must not panic and must not drop the hit"
+        );
+        let r = &results[0];
+        assert_eq!(r.chunk_id, "fallback_corrupt");
+        assert_eq!(r.chunk.doc_id, "doc_fallback_corrupt");
+        assert_eq!(r.chunk.doc_title, "论持久战");
+        assert_eq!(r.chunk.period, HistoricalPeriod::WarOfResistance);
+        assert_eq!(r.chunk.raw_text, "中日战争是持久战，三个阶段。");
+        assert!(r.chunk.tags.is_empty());
     }
 }
