@@ -1,9 +1,10 @@
 use crate::error::{Result, VectorError};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 /// Project config loaded from `config.toml` (cwd) or `MAO_AGENT_CONFIG`.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Clone, Deserialize)]
 pub struct ProjectConfig {
     #[serde(default)]
     pub cohere: CohereConfig,
@@ -15,12 +16,12 @@ pub struct ProjectConfig {
     pub server: ServerConfig,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Clone, Deserialize)]
 pub struct CohereConfig {
     pub api_key: Option<String>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Clone, Deserialize)]
 pub struct GeminiConfig {
     pub api_key: Option<String>,
     pub model: Option<String>,
@@ -29,7 +30,7 @@ pub struct GeminiConfig {
 
 /// SiliconFlow OpenAI-compatible embedding backend (production default).
 /// BAAI/bge-m3 yields 1024-dim dense vectors.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Clone, Deserialize)]
 pub struct SiliconFlowConfig {
     pub api_key: Option<String>,
     pub base_url: Option<String>,
@@ -37,7 +38,7 @@ pub struct SiliconFlowConfig {
     pub dimension: Option<usize>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Clone, Deserialize)]
 pub struct ServerConfig {
     /// Explicit CORS origin allowlist (http://host:port). Empty/omitted → localhost defaults.
     pub cors_origins: Option<Vec<String>>,
@@ -46,6 +47,8 @@ pub struct ServerConfig {
     /// Max concurrent ask/ask-stream handlers (default 32 when unset at CLI).
     pub max_concurrent_asks: Option<usize>,
 }
+
+static DEFAULT_CONFIG: OnceLock<Option<ProjectConfig>> = OnceLock::new();
 
 impl ProjectConfig {
     pub fn parse(toml_text: &str) -> Result<Self> {
@@ -58,8 +61,14 @@ impl ProjectConfig {
         Self::parse(&text)
     }
 
-    /// Missing file → `None`. Parse/IO errors are logged and treated as unset.
-    pub fn try_load_default() -> Option<Self> {
+    /// Get a reference to the globally cached default config (parsed at most once per process).
+    pub fn cached_default() -> Option<&'static ProjectConfig> {
+        DEFAULT_CONFIG
+            .get_or_init(Self::try_load_default_uncached)
+            .as_ref()
+    }
+
+    fn try_load_default_uncached() -> Option<Self> {
         let path = discover_config_path()?;
         match Self::load_from_path(&path) {
             Ok(cfg) => Some(cfg),
@@ -68,6 +77,11 @@ impl ProjectConfig {
                 None
             }
         }
+    }
+
+    /// Backward-compatible interface: returns a clone of the global cache, never re-reads disk.
+    pub fn try_load_default() -> Option<Self> {
+        Self::cached_default().cloned()
     }
 
     pub fn cohere_api_key(&self) -> Option<&str> {
@@ -128,4 +142,40 @@ pub fn discover_config_path() -> Option<PathBuf> {
 
 pub fn nonempty_key(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|s| !s.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_cached_default_idempotence() {
+        let first = ProjectConfig::cached_default();
+        let second = ProjectConfig::cached_default();
+        let third = ProjectConfig::cached_default();
+
+        match (first, second, third) {
+            (Some(a), Some(b), Some(c)) => {
+                assert!(
+                    std::ptr::eq(a, b),
+                    "cached_default must return the same reference"
+                );
+                assert!(
+                    std::ptr::eq(b, c),
+                    "cached_default must return the same reference"
+                );
+                // try_load_default returns a clone with identical behavior.
+                let cloned = ProjectConfig::try_load_default().expect("cache Some => clone Some");
+                assert_eq!(cloned.cohere_api_key(), a.cohere_api_key());
+                assert_eq!(cloned.gemini_api_key(), a.gemini_api_key());
+                assert_eq!(cloned.siliconflow_api_key(), a.siliconflow_api_key());
+                assert_eq!(cloned.api_token(), a.api_token());
+                assert_eq!(cloned.max_concurrent_asks(), a.max_concurrent_asks());
+            }
+            (None, None, None) => {
+                assert!(ProjectConfig::try_load_default().is_none());
+            }
+            _ => panic!("cached_default must be consistent across calls"),
+        }
+    }
 }

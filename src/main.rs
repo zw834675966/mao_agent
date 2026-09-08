@@ -1019,11 +1019,9 @@ async fn handle_serve(args: &ServeArgs) -> Result<(), Box<dyn std::error::Error>
             .or(args.embedder.embed_api_key.as_deref()),
     );
     tracing::info!(rerank_enabled = reranker.is_some(), "rerank status");
+    let cfg = mao_agent::config::ProjectConfig::cached_default();
     let cors = {
-        let cfg_origins = mao_agent::config::ProjectConfig::try_load_default()
-            .as_ref()
-            .and_then(|c| c.cors_origins())
-            .map(|s| s.to_vec());
+        let cfg_origins = cfg.and_then(|c| c.cors_origins()).map(|s| s.to_vec());
         mao_agent::server::cors::CorsAllowlist::resolve(
             args.cors_origins.as_deref(),
             cfg_origins.as_deref(),
@@ -1036,21 +1034,19 @@ async fn handle_serve(args: &ServeArgs) -> Result<(), Box<dyn std::error::Error>
             .filter_map(|v| v.to_str().ok())
             .collect::<Vec<_>>()
     );
-    let cfg = mao_agent::config::ProjectConfig::try_load_default();
     let api_token = args
         .api_token
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_owned)
-        .or_else(|| cfg.as_ref().and_then(|c| c.api_token().map(str::to_owned)));
+        .or_else(|| cfg.and_then(|c| c.api_token().map(str::to_owned)));
     // clap resolves --max-concurrent-asks / MAO_MAX_CONCURRENT_ASKS (default 32).
     // Config file can override only when CLI left at default and config sets a value.
     let max_concurrent_asks = if args.max_concurrent_asks != 32 {
         args.max_concurrent_asks
     } else {
-        cfg.as_ref()
-            .and_then(|c| c.max_concurrent_asks())
+        cfg.and_then(|c| c.max_concurrent_asks())
             .unwrap_or(args.max_concurrent_asks)
     };
     tracing::info!(
