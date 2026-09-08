@@ -7,7 +7,6 @@ use axum::{
     response::{IntoResponse, Response},
 };
 
-use crate::mcp::dispatcher::McpDispatcher;
 use crate::mcp::types::{JsonRpcError, JsonRpcRequest, JsonRpcResponse};
 use crate::server::state::AppState;
 
@@ -81,8 +80,7 @@ pub async fn handle_mcp(
         None
     };
 
-    let dispatcher = McpDispatcher::from_app_state(&state);
-    let maybe_resp = dispatcher.handle_request(req).await;
+    let maybe_resp = state.mcp_dispatcher.handle_request(req).await;
 
     let is_err = maybe_resp.as_ref().is_some_and(|r| r.error.is_some());
     state.metrics.record_mcp(started, is_err);

@@ -1,9 +1,12 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
+use crate::agent::DialecticalAgent;
 use crate::graph::GraphStore;
 use crate::index::{FullTextIndex, HybridSearchCoordinator, HybridSearchService};
+use crate::mcp::dispatcher::McpDispatcher;
 use crate::rerank::Reranker;
 use crate::server::config::ServerConfig;
 use crate::server::error::{ApiError, ApiResult};
@@ -34,6 +37,12 @@ pub struct AppState {
     pub graph: Option<Arc<GraphStore>>,
     /// Unified hybrid search service (vector + BM25 + RRF + graph + rerank).
     pub search_service: Arc<HybridSearchService>,
+    /// Shared reqwest client reused by all agents (no per-request pool rebuild).
+    pub http_client: reqwest::Client,
+    /// Pre-built shared dialectical agent (fast path for default config).
+    pub agent: Arc<DialecticalAgent>,
+    /// Pre-built shared MCP dispatcher (zero per-request allocation).
+    pub mcp_dispatcher: Arc<McpDispatcher>,
 }
 
 impl AppState {
@@ -93,6 +102,23 @@ impl AppState {
     ) -> Self {
         let limit = config.max_concurrent_asks.max(1);
         let graph = search_service.graph.clone();
+        let http_client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(60))
+            .build()
+            .unwrap_or_default();
+        let agent = Arc::new(DialecticalAgent::from_service_with_client(
+            Arc::clone(&search_service),
+            Some(config.chat_base_url.clone()),
+            config.chat_api_key.clone(),
+            Some(config.chat_model.clone()),
+            http_client.clone(),
+            Some(metrics.fallback_counter()),
+        ));
+        let mcp_dispatcher = Arc::new(McpDispatcher::from_components(
+            Arc::clone(&search_service),
+            search_service.store.clone(),
+            Some(Arc::clone(&agent)),
+        ));
         Self {
             store: search_service.store.clone(),
             tantivy: search_service.fulltext.clone(),
@@ -109,6 +135,9 @@ impl AppState {
             }),
             ask_semaphore: Arc::new(Semaphore::new(limit)),
             graph,
+            http_client,
+            agent,
+            mcp_dispatcher,
         }
     }
 
@@ -156,6 +185,20 @@ impl AppState {
             graph: Some(graph),
             reranker: self.reranker.clone(),
         });
+        // Refresh agent and dispatcher to reference the updated search service.
+        self.agent = Arc::new(DialecticalAgent::from_service_with_client(
+            Arc::clone(&self.search_service),
+            Some(self.chat_base_url.clone()),
+            self.chat_api_key.clone(),
+            Some(self.chat_model.clone()),
+            self.http_client.clone(),
+            Some(self.metrics.fallback_counter()),
+        ));
+        self.mcp_dispatcher = Arc::new(McpDispatcher::from_components(
+            Arc::clone(&self.search_service),
+            Arc::clone(&self.store),
+            Some(Arc::clone(&self.agent)),
+        ));
         self
     }
 

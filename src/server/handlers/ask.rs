@@ -65,25 +65,31 @@ async fn handle_ask_inner(
     }
     let top_k = req.top_k.unwrap_or(3).clamp(1, 10);
     let filter = build_filter(&req);
-    let (base_url, api_key, model) = resolve_chat_overrides(&state, &req, header_api_key);
     let start = Instant::now();
 
-    let mut agent = DialecticalAgent::new_with_fallback_counter(
-        Arc::clone(&state.store),
-        state.tantivy.clone(),
-        Some(base_url),
-        api_key,
-        Some(model),
-        state.reranker.clone(),
-        Some(state.metrics.fallback_counter()),
-    );
-    if let Some(graph) = state.graph.clone() {
-        agent = agent.with_graph(graph);
-    }
-    let answer = agent
-        .ask(&req.question, top_k, filter.as_ref())
-        .await
-        .map_err(ApiError::from)?;
+    // Fast path: no per-request LLM overrides — use the pre-built shared agent.
+    let has_overrides = req.base_url.is_some() || req.api_key.is_some() || req.model.is_some() || header_api_key.is_some();
+    let answer = if !has_overrides {
+        state
+            .agent
+            .ask(&req.question, top_k, filter.as_ref())
+            .await
+            .map_err(ApiError::from)?
+    } else {
+        let (base_url, api_key, model) = resolve_chat_overrides(&state, &req, header_api_key);
+        let agent = DialecticalAgent::from_service_with_client(
+            Arc::clone(&state.search_service),
+            Some(base_url),
+            api_key,
+            Some(model),
+            state.http_client.clone(),
+            Some(state.metrics.fallback_counter()),
+        );
+        agent
+            .ask(&req.question, top_k, filter.as_ref())
+            .await
+            .map_err(ApiError::from)?
+    };
 
     let elapsed_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
     let resp = AskResponse {
@@ -149,28 +155,33 @@ pub async fn handle_ask_stream(
     let header_api_key = cohere_key_from_headers(&state, &headers);
     let top_k = req.top_k.unwrap_or(3).clamp(1, 10);
     let filter = build_filter(&req);
-    let (base_url, api_key, model) = resolve_chat_overrides(&state, &req, header_api_key);
+    let has_overrides = req.base_url.is_some() || req.api_key.is_some() || req.model.is_some() || header_api_key.is_some();
     let question = req.question.clone();
     let metrics = Arc::clone(&state.metrics);
 
     let stream = async_stream::stream! {
         let _permit = permit;
         let start = Instant::now();
-        let mut agent = DialecticalAgent::new_with_fallback_counter(
-        Arc::clone(&state.store),
-        state.tantivy.clone(),
-        Some(base_url),
-        api_key,
-        Some(model),
-        state.reranker.clone(),
-        Some(state.metrics.fallback_counter()),
-    );
-        if let Some(graph) = state.graph.clone() {
-            agent = agent.with_graph(graph);
-        }
+
+        // Fast path: no per-request LLM overrides — use the pre-built shared agent.
+        // Override path: lightweight agent reusing the shared http_client & search_service.
+        let answer = if !has_overrides {
+            state.agent.ask(&question, top_k, filter.as_ref()).await
+        } else {
+            let (base_url, api_key, model) = resolve_chat_overrides(&state, &req, header_api_key);
+            let agent = DialecticalAgent::from_service_with_client(
+                Arc::clone(&state.search_service),
+                Some(base_url),
+                api_key,
+                Some(model),
+                state.http_client.clone(),
+                Some(state.metrics.fallback_counter()),
+            );
+            agent.ask(&question, top_k, filter.as_ref()).await
+        };
 
         // 1) Retrieve + generate (reuses DialecticalAgent::ask for now; future: true streaming LLM)
-        let answer = match agent.ask(&question, top_k, filter.as_ref()).await {
+        let answer = match answer {
             Ok(a) => {
                 metrics.record_ask(start, false);
                 a

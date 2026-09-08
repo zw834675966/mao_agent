@@ -54,12 +54,6 @@ impl McpDispatcher {
         self
     }
 
-    pub fn from_app_state(state: &crate::server::state::AppState) -> Self {
-        Self::from_components(
-            Arc::clone(&state.search_service), Arc::clone(&state.store), None,
-        )
-    }
-
     pub async fn handle_request(&self, req: JsonRpcRequest) -> Option<JsonRpcResponse> {
         if req.is_notification() {
             if req.method == "notifications/initialized" {
