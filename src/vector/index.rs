@@ -156,6 +156,22 @@ impl Clone for VectorIndex {
         cloned
     }
 }
+
+impl VectorIndex {
+    /// 仅克隆用于持久化快照的纯数据结构（不触发昂贵的 HNSW 图重建），供锁外异步安全序列化
+    pub(crate) fn snapshot_clone(&self) -> Self {
+        Self {
+            dimension: self.dimension,
+            entries: self.entries.clone(),
+            id_to_idx: self.id_to_idx.clone(),
+            period_index: self.period_index.clone(),
+            volume_index: self.volume_index.clone(),
+            doc_index: self.doc_index.clone(),
+            tag_index: self.tag_index.clone(),
+            hnsw: None,
+        }
+    }
+}
 /// Extract canonical volume lookup keys (e.g. "第二卷", "选集第二卷", "毛泽东选集第二卷")
 /// for O(1) inverted index resolution.
 pub(crate) fn extract_volume_lookup_keys(volume: &str) -> Vec<String> {
@@ -965,6 +981,41 @@ mod tests {
         // Top-1 should match for this simple axis-aligned case.
         assert_eq!(ann[0].chunk_id, brute[0].chunk_id);
 
+        reset_hnsw_threshold_for_test();
+    }
+
+    #[test]
+    fn snapshot_clone_does_not_rebuild_hnsw() {
+        set_hnsw_threshold_for_test(2);
+        let mut index = VectorIndex::new(2);
+        let entries = vec![
+            VectorEntry {
+                id: "s1".into(),
+                vector: vec![1.0, 0.0],
+                chunk: create_dummy_chunk(
+                    "s1",
+                    "s",
+                    HistoricalPeriod::WarOfResistance,
+                    "选集第二卷",
+                ),
+            },
+            VectorEntry {
+                id: "s2".into(),
+                vector: vec![0.0, 1.0],
+                chunk: create_dummy_chunk(
+                    "s2",
+                    "s",
+                    HistoricalPeriod::WarOfResistance,
+                    "选集第二卷",
+                ),
+            },
+        ];
+        index.insert_batch(entries).unwrap();
+        // 快照克隆必须跳过昂贵的 HNSW 图重建（与原 Clone 实现区分）。
+        let snap = index.snapshot_clone();
+        assert!(!snap.has_hnsw());
+        assert_eq!(snap.len(), index.len());
+        assert!(index.has_hnsw());
         reset_hnsw_threshold_for_test();
     }
 }

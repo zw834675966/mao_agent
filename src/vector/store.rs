@@ -257,17 +257,19 @@ impl VectorStore {
             std::fs::create_dir_all(parent)?;
         }
 
-        // 限制读锁范围：仅在内存编码期间持有读锁，完成后立即释放锁
-        let encoded = {
+        // 限制读锁范围：仅在锁内进行微秒级的快照数据浅拷贝，完成后立即释放锁
+        let (identity, index_snapshot) = {
             let index_guard = self.index.read().await;
             let identity = SnapshotIdentity {
                 model: self.embedder.model_name().to_string(),
                 dimension: index_guard.dimension(),
             };
-            persist::encode_snapshot(&identity, &index_guard)?
-        }; // index_guard 在此被立即 Drop，释放读锁
+            let snapshot = index_guard.snapshot_clone();
+            (identity, snapshot)
+        }; // index_guard 在此被立即 Drop，彻底释放读锁！
 
-        // 磁盘原子写入与元数据落盘在锁作用域外执行，不阻塞并发搜索与写入
+        // CPU 密集的 bincode 序列化与磁盘原子落盘全部在读锁外执行，不阻塞任何并发搜索与写入
+        let encoded = persist::encode_snapshot(&identity, &index_snapshot)?;
         persist::atomic_replace(target_path, &encoded)?;
 
         info!(
