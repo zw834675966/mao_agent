@@ -21,8 +21,8 @@ use tower_http::trace::TraceLayer;
 use crate::index::HybridSearchCoordinator;
 use crate::rerank::Reranker;
 
-pub use self::config::ServerConfig;
 use self::auth::ApiAuth;
+pub use self::config::ServerConfig;
 use self::cors::CorsAllowlist;
 use self::request_id::RequestId;
 use self::state::AppState;
@@ -122,11 +122,7 @@ pub async fn serve_with_config(
     search_service: Arc<crate::index::HybridSearchService>,
     config: ServerConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let state = AppState::with_config(
-        search_service,
-        config.clone(),
-        metrics::HttpMetrics::new(),
-    );
+    let state = AppState::with_config(search_service, config.clone(), metrics::HttpMetrics::new());
     let app = build_router_with_cors(state, config.cors);
     tracing::info!("  GET  /live  /health");
     tracing::info!("  GET  /metrics  /api/v1/metrics");
@@ -166,11 +162,7 @@ pub async fn serve(
         chat_model,
     };
     let search_service = Arc::new(crate::index::HybridSearchService::new(
-        store,
-        tantivy,
-        hybrid,
-        graph,
-        reranker,
+        store, tantivy, hybrid, graph, reranker,
     ));
     serve_with_config(search_service, config).await
 }

@@ -7,7 +7,7 @@ use crate::graph::GraphStore;
 use crate::index::{FullTextIndex, HybridSearchService};
 use crate::mcp::tools::{citation, principles};
 use crate::mcp::types::{
-    JsonRpcError, JsonRpcRequest, JsonRpcResponse, McpCallToolResult, MCP_PROTOCOL_VERSION,
+    JsonRpcError, JsonRpcRequest, JsonRpcResponse, MCP_PROTOCOL_VERSION, McpCallToolResult,
     SERVER_NAME, SERVER_VERSION, list_all_tools,
 };
 use crate::rerank::Reranker;
@@ -22,28 +22,46 @@ pub struct McpDispatcher {
 
 impl McpDispatcher {
     pub fn from_components(
-        search_service: Arc<HybridSearchService>, store: Arc<VectorStore>,
+        search_service: Arc<HybridSearchService>,
+        store: Arc<VectorStore>,
         agent: Option<Arc<DialecticalAgent>>,
     ) -> Self {
-        Self { search_service, store, agent }
+        Self {
+            search_service,
+            store,
+            agent,
+        }
     }
 
     pub fn new(
-        store: Arc<VectorStore>, tantivy: Option<Arc<FullTextIndex>>,
-        graph: Option<Arc<GraphStore>>, reranker: Option<Arc<dyn Reranker>>,
+        store: Arc<VectorStore>,
+        tantivy: Option<Arc<FullTextIndex>>,
+        graph: Option<Arc<GraphStore>>,
+        reranker: Option<Arc<dyn Reranker>>,
     ) -> Self {
         let search_service = Arc::new(HybridSearchService::new(
-            Arc::clone(&store), tantivy, Default::default(), graph, reranker,
+            Arc::clone(&store),
+            tantivy,
+            Default::default(),
+            graph,
+            reranker,
         ));
         Self::from_components(search_service, store, None)
     }
 
     pub fn with_chat_overrides(
-        mut self, base_url: Option<String>, api_key: Option<String>, model: Option<String>,
+        mut self,
+        base_url: Option<String>,
+        api_key: Option<String>,
+        model: Option<String>,
     ) -> Self {
         let agent = DialecticalAgent::from_service_with_client(
-            Arc::clone(&self.search_service), base_url, api_key, model,
-            reqwest::Client::new(), None,
+            Arc::clone(&self.search_service),
+            base_url,
+            api_key,
+            model,
+            reqwest::Client::new(),
+            None,
         );
         self.agent = Some(Arc::new(agent));
         self
@@ -80,23 +98,32 @@ impl McpDispatcher {
     }
 
     async fn handle_tools_call(
-        &self, req: JsonRpcRequest,
+        &self,
+        req: JsonRpcRequest,
     ) -> std::result::Result<serde_json::Value, JsonRpcError> {
         let params = req.params.as_ref().ok_or_else(|| {
             JsonRpcError::invalid_params("Missing parameters object for tools/call")
         })?;
-        let name = params.get("name").and_then(|v| v.as_str()).ok_or_else(|| {
-            JsonRpcError::invalid_params("Missing tool name in tools/call")
-        })?;
-        let arguments = params.get("arguments").cloned()
+        let name = params
+            .get("name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| JsonRpcError::invalid_params("Missing tool name in tools/call"))?;
+        let arguments = params
+            .get("arguments")
+            .cloned()
             .unwrap_or_else(|| serde_json::json!({}));
         let result = match name {
-            "query_dialectical_principles" => principles::execute_query_dialectical_principles(
-                &self.search_service, self.agent.as_deref(), arguments,
-            ).await?,
-            "verify_historical_citation" => citation::execute_verify_historical_citation(
-                &self.store, arguments,
-            ).await?,
+            "query_dialectical_principles" => {
+                principles::execute_query_dialectical_principles(
+                    &self.search_service,
+                    self.agent.as_deref(),
+                    arguments,
+                )
+                .await?
+            }
+            "verify_historical_citation" => {
+                citation::execute_verify_historical_citation(&self.store, arguments).await?
+            }
             unknown => McpCallToolResult::error(format!("Unknown tool: {unknown}")),
         };
         serde_json::to_value(result).map_err(|e| JsonRpcError::internal_error(e.to_string()))
@@ -108,11 +135,20 @@ mod tests {
     use super::*;
 
     async fn call(id: i64, method: &str) -> JsonRpcResponse {
-        McpDispatcher::new(Arc::new(VectorStore::new_deterministic(64)), None, None, None)
-            .handle_request(JsonRpcRequest {
-                jsonrpc: "2.0".into(), id: Some(serde_json::json!(id)),
-                method: method.into(), params: None,
-            }).await.unwrap()
+        McpDispatcher::new(
+            Arc::new(VectorStore::new_deterministic(64)),
+            None,
+            None,
+            None,
+        )
+        .handle_request(JsonRpcRequest {
+            jsonrpc: "2.0".into(),
+            id: Some(serde_json::json!(id)),
+            method: method.into(),
+            params: None,
+        })
+        .await
+        .unwrap()
     }
 
     #[tokio::test]

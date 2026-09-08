@@ -166,13 +166,7 @@ impl AppState {
             chat_api_key,
             chat_model,
         };
-        let search_service = HybridSearchService::new(
-            store,
-            tantivy,
-            hybrid,
-            None,
-            reranker,
-        );
+        let search_service = HybridSearchService::new(store, tantivy, hybrid, None, reranker);
         Self::with_config(Arc::new(search_service), config, metrics)
     }
 

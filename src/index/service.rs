@@ -99,14 +99,8 @@ impl HybridSearchService {
         } else {
             Some(top_k)
         };
-        let fused = expand_with_graph(
-            self.graph.as_deref(),
-            &self.store,
-            fused,
-            query,
-            final_k,
-        )
-        .await;
+        let fused =
+            expand_with_graph(self.graph.as_deref(), &self.store, fused, query, final_k).await;
 
         // 5. Rerank or fallback
         let reranker = if skip_rerank {
@@ -168,17 +162,29 @@ mod tests {
         let chunk1 = make_chunk("c1", "论持久战", HistoricalPeriod::WarOfResistance);
         let chunk2 = make_chunk("c2", "矛盾论", HistoricalPeriod::AgrarianRevolutionaryWar);
 
-        store.index_chunks(vec![chunk1.clone(), chunk2.clone()]).await.unwrap();
+        store
+            .index_chunks(vec![chunk1.clone(), chunk2.clone()])
+            .await
+            .unwrap();
         ft.insert_batch(&[chunk1, chunk2]).unwrap();
 
         let service = make_service(Arc::new(store), Some(Arc::new(ft)), None, None);
-        let results = service.search_hybrid("持久战", 5, None, true).await.unwrap();
+        let results = service
+            .search_hybrid("持久战", 5, None, true)
+            .await
+            .unwrap();
 
         assert!(!results.is_empty(), "hybrid search should return results");
         let c1 = results.iter().find(|h| h.chunk_id == "c1");
         assert!(c1.is_some(), "c1 should be found via both paths");
-        assert!(c1.unwrap().bm25_score.is_some(), "c1 should have bm25 score");
-        assert!(c1.unwrap().vector_score.is_some(), "c1 should have vector score");
+        assert!(
+            c1.unwrap().bm25_score.is_some(),
+            "c1 should have bm25 score"
+        );
+        assert!(
+            c1.unwrap().vector_score.is_some(),
+            "c1 should have vector score"
+        );
     }
 
     #[tokio::test]
@@ -188,9 +194,15 @@ mod tests {
         store.index_chunks(vec![chunk]).await.unwrap();
 
         let service = make_service(Arc::new(store), None, None, None);
-        let results = service.search_hybrid("持久战", 5, None, true).await.unwrap();
+        let results = service
+            .search_hybrid("持久战", 5, None, true)
+            .await
+            .unwrap();
 
-        assert!(!results.is_empty(), "vector-only fallback should still return results");
+        assert!(
+            !results.is_empty(),
+            "vector-only fallback should still return results"
+        );
         assert!(results.iter().all(|h| h.bm25_score.is_none()));
         assert!(results.iter().all(|h| h.vector_score.is_some()));
     }
@@ -204,10 +216,15 @@ mod tests {
         ft.insert_batch(&[chunk]).unwrap();
 
         let service = make_service(Arc::new(store), Some(Arc::new(ft)), None, None);
-        let results = service.search_hybrid("持久战", 5, None, true).await.unwrap();
+        let results = service
+            .search_hybrid("持久战", 5, None, true)
+            .await
+            .unwrap();
 
         assert!(!results.is_empty());
-        assert!(results.iter().all(|h| h.graph_paths.is_none()),
-            "graph=None must not inject graph_paths");
+        assert!(
+            results.iter().all(|h| h.graph_paths.is_none()),
+            "graph=None must not inject graph_paths"
+        );
     }
 }

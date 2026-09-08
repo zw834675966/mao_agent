@@ -146,13 +146,7 @@ mod tests {
         };
         store.index_document(&doc).await.expect("index doc");
 
-        HybridSearchService::new(
-            store,
-            None,
-            HybridSearchCoordinator::default(),
-            None,
-            None,
-        )
+        HybridSearchService::new(store, None, HybridSearchCoordinator::default(), None, None)
     }
 
     #[tokio::test]

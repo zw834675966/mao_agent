@@ -68,7 +68,10 @@ async fn handle_ask_inner(
     let start = Instant::now();
 
     // Fast path: no per-request LLM overrides — use the pre-built shared agent.
-    let has_overrides = req.base_url.is_some() || req.api_key.is_some() || req.model.is_some() || header_api_key.is_some();
+    let has_overrides = req.base_url.is_some()
+        || req.api_key.is_some()
+        || req.model.is_some()
+        || header_api_key.is_some();
     let answer = if !has_overrides {
         state
             .agent
@@ -155,7 +158,10 @@ pub async fn handle_ask_stream(
     let header_api_key = cohere_key_from_headers(&state, &headers);
     let top_k = req.top_k.unwrap_or(3).clamp(1, 10);
     let filter = build_filter(&req);
-    let has_overrides = req.base_url.is_some() || req.api_key.is_some() || req.model.is_some() || header_api_key.is_some();
+    let has_overrides = req.base_url.is_some()
+        || req.api_key.is_some()
+        || req.model.is_some()
+        || header_api_key.is_some();
     let question = req.question.clone();
     let metrics = Arc::clone(&state.metrics);
 

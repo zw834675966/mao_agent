@@ -3,9 +3,9 @@ use crate::agent::prompt::build_rag_user_prompt_with_triples;
 use crate::agent::verifier::{CitationVerifier, VerificationReport};
 use crate::error::Result;
 use crate::graph::GraphStore;
+use crate::index::HybridSearchService;
 use crate::index::fulltext::FullTextIndex;
 use crate::index::hybrid::HybridSearchCoordinator;
-use crate::index::HybridSearchService;
 use crate::model::{DocumentChunk, VectorFilter};
 use crate::rerank::Reranker;
 use crate::vector::store::VectorStore;
@@ -67,14 +67,10 @@ impl DialecticalAgent {
             .unwrap_or_else(|| crate::vector::embedder::COHERE_COMPAT_BASE_URL.to_string())
             .trim_end_matches('/')
             .to_string();
-        let model_name = model_name
-            .unwrap_or_else(|| crate::vector::embedder::COHERE_CHAT_MODEL.to_string());
-        let mut fallback = FallbackLlmClient::from_api_key_with_client(
-            client,
-            base_url,
-            api_key,
-            model_name,
-        );
+        let model_name =
+            model_name.unwrap_or_else(|| crate::vector::embedder::COHERE_CHAT_MODEL.to_string());
+        let mut fallback =
+            FallbackLlmClient::from_api_key_with_client(client, base_url, api_key, model_name);
         if let Some(counter) = fallback_counter {
             fallback = fallback.with_fallback_counter(counter);
         }
@@ -165,12 +161,16 @@ impl DialecticalAgent {
             .await?;
         let rerank_applied = results.iter().any(|r| r.rerank_score.is_some());
         let rerank_scores = if rerank_applied {
-            Some(results.iter().map(|r| r.rerank_score.unwrap_or(0.0)).collect())
+            Some(
+                results
+                    .iter()
+                    .map(|r| r.rerank_score.unwrap_or(0.0))
+                    .collect(),
+            )
         } else {
             None
         };
-        let retrieved_chunks: Vec<DocumentChunk> =
-            results.into_iter().map(|r| r.chunk).collect();
+        let retrieved_chunks: Vec<DocumentChunk> = results.into_iter().map(|r| r.chunk).collect();
 
         if retrieved_chunks.is_empty() {
             return Ok(AgentAnswer {
