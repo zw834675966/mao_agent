@@ -103,7 +103,7 @@ impl RetryPolicy {
         R: FnMut(&E) -> bool,
         E: std::fmt::Display,
     {
-        let attempts = self.max_attempts.max(1);
+        let attempts = self.max_attempts;
         let mut last_err: Option<E> = None;
         for attempt in 0..attempts {
             let delay = self.backoff_before_attempt(attempt);
@@ -124,12 +124,23 @@ impl RetryPolicy {
                         last_err = Some(e);
                         continue;
                     }
-                    return Err(e);
+                    last_err = Some(e);
+                    break;
                 }
             }
         }
-        Err(last_err.expect("max_attempts >= 1"))
+        match last_err {
+            Some(e) => Err(e),
+            None => op(0).await,
+        }
     }
+}
+
+/// Render an HTTP error response body, preserving a diagnostic when the body
+/// read itself fails (e.g. connection reset mid-read) instead of silently
+/// degrading to an empty string.
+pub fn diagnostic_http_error_body(body: Result<String, impl std::fmt::Display>) -> String {
+    body.unwrap_or_else(|e| format!("<failed to read error response body: {e}>"))
 }
 
 #[cfg(test)]
@@ -208,5 +219,67 @@ mod tests {
         assert_eq!(policy.backoff_before_attempt(1), Duration::from_millis(10));
         assert_eq!(policy.backoff_before_attempt(2), Duration::from_millis(20));
         assert_eq!(policy.backoff_before_attempt(3), Duration::from_millis(25));
+    }
+
+    #[tokio::test]
+    async fn max_attempts_zero_does_not_panic_and_runs_op_once() {
+        let hits = AtomicU32::new(0);
+        let policy = RetryPolicy {
+            max_attempts: 0,
+            initial_backoff: Duration::from_millis(1),
+            max_backoff: Duration::from_millis(8),
+            jitter: false,
+        };
+        let out = policy
+            .run(
+                |_| async {
+                    hits.fetch_add(1, Ordering::SeqCst);
+                    Ok::<_, &str>(7)
+                },
+                |_| true,
+            )
+            .await
+            .unwrap();
+        assert_eq!(out, 7);
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn max_attempts_zero_returns_op_error_without_panic() {
+        let hits = AtomicU32::new(0);
+        let policy = RetryPolicy {
+            max_attempts: 0,
+            initial_backoff: Duration::from_millis(1),
+            max_backoff: Duration::from_millis(8),
+            jitter: false,
+        };
+        let err = policy
+            .run(
+                |_| async {
+                    hits.fetch_add(1, Ordering::SeqCst);
+                    Err::<(), _>("zero-attempts")
+                },
+                |_| true,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err, "zero-attempts");
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn diagnostic_http_error_body_keeps_ok_body() {
+        let body = diagnostic_http_error_body(Ok::<_, &str>("upstream 502 html".to_string()));
+        assert_eq!(body, "upstream 502 html");
+    }
+
+    #[test]
+    fn diagnostic_http_error_body_preserves_read_failure() {
+        let body = diagnostic_http_error_body(Err("connection reset"));
+        assert!(
+            body.contains("<failed to read error response body:"),
+            "got {body}"
+        );
+        assert!(body.contains("connection reset"), "got {body}");
     }
 }

@@ -1,5 +1,5 @@
 use crate::error::{Result, VectorError};
-use crate::retry::RetryPolicy;
+use crate::retry::{RetryPolicy, diagnostic_http_error_body};
 use crate::vector::math::normalize_in_place;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -279,7 +279,7 @@ impl Embedder for OpenAIEmbedder {
                             .await
                             .map_err(AttemptErr::Fatal);
                     }
-                    let body = resp.text().await.unwrap_or_default();
+                    let body = diagnostic_http_error_body(resp.text().await);
                     let err = VectorError::EmbeddingError(format!(
                         "Embedding API returned HTTP {status}: {body}"
                     ));

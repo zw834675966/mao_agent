@@ -7,7 +7,7 @@ use tracing::warn;
 use crate::agent::prompt::DIALECTICAL_SYSTEM_PROMPT;
 use crate::error::{Result, VectorError};
 use crate::model::DocumentChunk;
-use crate::retry::RetryPolicy;
+use crate::retry::{RetryPolicy, diagnostic_http_error_body};
 use crate::vector::embedder::join_openai_path;
 
 /// LLM backend used by [`crate::agent::DialecticalAgent`].
@@ -144,7 +144,7 @@ impl OnlineLlmClient {
 
         let status = resp.status();
         if !status.is_success() {
-            let body = resp.text().await.unwrap_or_default();
+            let body = diagnostic_http_error_body(resp.text().await);
             let err = VectorError::Other(format!("LLM API returned HTTP {status}: {body}"));
             if RetryPolicy::should_retry_status(status) {
                 return Err(LlmAttemptError::Retryable(err));

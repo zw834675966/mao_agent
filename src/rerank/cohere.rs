@@ -7,7 +7,7 @@ use tracing::warn;
 use crate::error::{Result, VectorError};
 use crate::index::HybridSearchResult;
 use crate::rerank::Reranker;
-use crate::retry::RetryPolicy;
+use crate::retry::{RetryPolicy, diagnostic_http_error_body};
 
 /// Official Cohere v2 rerank endpoint (not the OpenAI-compat base).
 pub const COHERE_RERANK_URL: &str = "https://api.cohere.com/v2/rerank";
@@ -141,7 +141,7 @@ impl Reranker for CohereReranker {
 
                     let status = resp.status();
                     if !status.is_success() {
-                        let body = resp.text().await.unwrap_or_default();
+                        let body = diagnostic_http_error_body(resp.text().await);
                         let err = VectorError::RerankError(format!(
                             "Cohere rerank HTTP {status}: {body}"
                         ));
