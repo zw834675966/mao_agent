@@ -17,9 +17,10 @@ use axum::http::Request;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
+use mao_agent::agent::DialecticalAgent;
 use mao_agent::corpus::ChineseSemanticChunker;
 use mao_agent::graph::GraphStore;
-use mao_agent::index::{FullTextIndex, HybridSearchCoordinator};
+use mao_agent::index::{FullTextIndex, HybridSearchCoordinator, HybridSearchService};
 use mao_agent::mcp::dispatcher::McpDispatcher;
 use mao_agent::mcp::types::{JsonRpcError, JsonRpcRequest, JsonRpcResponse, MCP_PROTOCOL_VERSION};
 use mao_agent::model::{Document, DocumentMetadata, HistoricalPeriod};
@@ -618,4 +619,108 @@ async fn test_mcp_http_endpoint() {
     let principles4 = parsed4["principles"].as_array().unwrap();
     assert!(!principles4.is_empty());
     assert_eq!(principles4[0]["doc_title"], "矛盾论");
+}
+
+#[tokio::test]
+async fn test_mcp_dispatcher_reuses_cached_agent_on_synthesize() {
+    let (store, ft, graph, _) = setup_test_context().await;
+
+    // Build a shared HybridSearchService and DialecticalAgent (offline path, no API key).
+    let search_service = Arc::new(HybridSearchService::new(
+        Arc::clone(&store),
+        ft,
+        HybridSearchCoordinator::default(),
+        graph,
+        None,
+    ));
+    let agent = DialecticalAgent::from_service_with_client(
+        Arc::clone(&search_service),
+        Some("http://127.0.0.1:9999".to_string()),
+        None, // no API key → offline deterministic path
+        Some("test-model".to_string()),
+        reqwest::Client::new(),
+        None,
+    );
+    let agent_arc = Arc::new(agent);
+
+    let dispatcher = McpDispatcher::from_components(
+        Arc::clone(&search_service),
+        Arc::clone(&store),
+        Some(Arc::clone(&agent_arc)),
+    );
+
+    // Multiple synthesize: true calls must all succeed and reuse the cached agent.
+    let mut first_synthesis: Option<String> = None;
+    for i in 0..5 {
+        let call_req = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: Some(json!(100 + i)),
+            method: "tools/call".to_string(),
+            params: Some(json!({
+                "name": "query_dialectical_principles",
+                "arguments": {
+                    "query": "矛盾的法则与转化",
+                    "top_k": 2,
+                    "synthesize": true
+                }
+            })),
+        };
+
+        let resp = dispatcher
+            .handle_request(call_req)
+            .await
+            .expect("response expected");
+        assert!(resp.error.is_none(), "call {i} error: {:?}", resp.error);
+        let result = resp.result.expect("result expected");
+        let text = result["content"][0]["text"].as_str().unwrap();
+        let parsed: Value = serde_json::from_str(text).unwrap();
+
+        // synthesis_report must be present and non-empty (agent was actually used).
+        let synthesis = parsed["synthesis_report"]
+            .as_str()
+            .expect("synthesis_report string");
+        assert!(!synthesis.is_empty());
+        assert!(
+            !synthesis.contains("Synthesis unavailable"),
+            "agent must be available, got: {synthesis}"
+        );
+
+        // principles must be non-empty (retrieval still works).
+        let principles = parsed["principles"].as_array().unwrap();
+        assert!(!principles.is_empty());
+
+        // All calls must produce identical synthesis (deterministic offline agent).
+        if let Some(ref first) = first_synthesis {
+            assert_eq!(synthesis, first.as_str(), "call {i} synthesis diverged");
+        } else {
+            first_synthesis = Some(synthesis.to_string());
+        }
+    }
+
+    // Cloning the dispatcher must share the same cached agent (Arc semantics).
+    let dispatcher_clone = dispatcher.clone();
+    let call_req = JsonRpcRequest {
+        jsonrpc: "2.0".to_string(),
+        id: Some(json!(200)),
+        method: "tools/call".to_string(),
+        params: Some(json!({
+            "name": "query_dialectical_principles",
+            "arguments": {
+                "query": "矛盾的法则与转化",
+                "top_k": 2,
+                "synthesize": true
+            }
+        })),
+    };
+    let resp = dispatcher_clone
+        .handle_request(call_req)
+        .await
+        .expect("clone response");
+    assert!(resp.error.is_none());
+    let result = resp.result.expect("clone result");
+    let text = result["content"][0]["text"].as_str().unwrap();
+    let parsed: Value = serde_json::from_str(text).unwrap();
+    let synthesis = parsed["synthesis_report"].as_str().unwrap();
+    let expected = first_synthesis.as_ref().expect("first synthesis recorded");
+    assert_eq!(synthesis, expected.as_str());
 }

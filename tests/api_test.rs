@@ -816,3 +816,76 @@ async fn test_ask_concurrency_limit_returns_429() {
     drop(permit);
     assert!(state.try_acquire_ask().is_ok());
 }
+
+#[tokio::test]
+async fn test_ask_and_mcp_high_concurrency_connection_pool_stability() {
+    use axum::body::Body;
+    use axum::http::Request;
+    use mao_agent::server::build_router;
+    use tower::ServiceExt;
+
+    let state = test_state().await;
+    let app = build_router(state);
+
+    let mut handles = Vec::new();
+    for i in 0..40 {
+        let app = app.clone();
+        handles.push(tokio::spawn(async move {
+            if i % 2 == 0 {
+                // /api/v1/ask
+                let payload = serde_json::json!({
+                    "question": "抗日战争为什么是持久战？",
+                    "top_k": 1
+                });
+                let req = Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/ask")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&payload).unwrap()))
+                    .unwrap();
+                let resp = app.oneshot(req).await.unwrap();
+                assert!(resp.status().is_success(), "ask returned {}", resp.status());
+                let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+                    .await
+                    .unwrap();
+                let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+                assert!(body["content"].as_str().unwrap().contains("调查研究"));
+            } else {
+                // /api/v1/mcp
+                let payload = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": i,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "query_dialectical_principles",
+                        "arguments": {
+                            "query": "矛盾的法则与转化",
+                            "top_k": 2
+                        }
+                    }
+                });
+                let req = Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/mcp")
+                    .header("content-type", "application/json")
+                    .body(Body::from(serde_json::to_vec(&payload).unwrap()))
+                    .unwrap();
+                let resp = app.oneshot(req).await.unwrap();
+                assert!(resp.status().is_success(), "mcp returned {}", resp.status());
+                let bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+                    .await
+                    .unwrap();
+                let rpc: mao_agent::mcp::types::JsonRpcResponse =
+                    serde_json::from_slice(&bytes).unwrap();
+                assert!(rpc.error.is_none());
+                let result = rpc.result.unwrap();
+                let text = result["content"][0]["text"].as_str().unwrap();
+                let parsed: serde_json::Value = serde_json::from_str(text).unwrap();
+                assert_eq!(parsed["query"], "矛盾的法则与转化");
+            }
+        }));
+    }
+    for h in handles {
+        h.await.expect("join");
+    }
+}
