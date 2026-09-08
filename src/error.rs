@@ -59,7 +59,13 @@ pub enum VectorError {
 
 impl From<serde_json::Error> for VectorError {
     fn from(err: serde_json::Error) -> Self {
-        VectorError::Serialization(err.to_string())
+        use serde_json::error::Category;
+        match err.classify() {
+            Category::Io => VectorError::Io(std::io::Error::other(err.to_string())),
+            Category::Syntax | Category::Data | Category::Eof => {
+                VectorError::Deserialization(err.to_string())
+            }
+        }
     }
 }
 
@@ -71,8 +77,46 @@ impl From<serde_yaml::Error> for VectorError {
 
 impl From<bincode::Error> for VectorError {
     fn from(err: bincode::Error) -> Self {
-        VectorError::Serialization(err.to_string())
+        match &*err {
+            bincode::ErrorKind::Io(io) => {
+                VectorError::Io(std::io::Error::new(io.kind(), io.to_string()))
+            }
+            _ => VectorError::Deserialization(err.to_string()),
+        }
     }
 }
 
 pub type Result<T> = std::result::Result<T, VectorError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_serde_json_deserialization_error_mapping() {
+        let err: serde_json::Error =
+            serde_json::from_str::<serde_json::Value>("{invalid json").unwrap_err();
+        let ve: VectorError = err.into();
+        assert!(matches!(ve, VectorError::Deserialization(_)));
+        let msg = ve.to_string();
+        assert!(
+            msg.contains("Deserialization error"),
+            "unexpected message: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_bincode_deserialization_error_mapping() {
+        // Invalid bool encoding (value 2 instead of 0 or 1) is a
+        // deserialization error (not an I/O error).
+        let bytes: &[u8] = &[2u8];
+        let err: bincode::Error = bincode::deserialize::<bool>(bytes).unwrap_err();
+        let ve: VectorError = err.into();
+        assert!(matches!(ve, VectorError::Deserialization(_)));
+        let msg = ve.to_string();
+        assert!(
+            msg.contains("Deserialization error"),
+            "unexpected message: {msg}"
+        );
+    }
+}
