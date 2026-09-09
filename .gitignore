@@ -17,6 +17,10 @@ logs/
 .santa-reviewer-b-prompt.txt
 corpus_sample15/
 
+# Local tool caches (IDE skills, code-index agents)
+.codebuddy/
+.ua/
+
 # Environment files and credentials
 .env
 .env.*
