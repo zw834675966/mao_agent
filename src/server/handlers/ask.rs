@@ -203,7 +203,9 @@ pub async fn handle_ask_stream(
         };
 
         // event: retrieved
-        if let Ok(data) = serde_json::to_string(&SseRetrievedEvent { chunks: answer.retrieved_chunks.clone() }) {
+        if let Ok(data) = serde_json::to_string(&SseRetrievedEvent {
+            chunks: &answer.retrieved_chunks,
+        }) {
             yield Ok(Event::default().event("retrieved").data(data));
         }
 
@@ -242,7 +244,7 @@ pub async fn handle_ask_stream(
 
         // event: citation
         if let Ok(data) = serde_json::to_string(&SseCitationEvent {
-            reports: answer.citation_reports.clone(),
+            reports: &answer.citation_reports,
             is_fully_grounded: answer.is_fully_grounded,
         }) {
             yield Ok(Event::default().event("citation").data(data));

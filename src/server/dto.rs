@@ -111,8 +111,8 @@ pub struct AskResponse {
 // SSE 事件负载
 
 #[derive(Debug, Serialize)]
-pub struct SseRetrievedEvent {
-    pub chunks: Vec<DocumentChunk>,
+pub struct SseRetrievedEvent<'a> {
+    pub chunks: &'a [DocumentChunk],
 }
 
 /// SSE payload after retrieval: final evidence order and whether rerank stamped scores.
@@ -136,8 +136,8 @@ pub struct SseDeltaEvent {
 }
 
 #[derive(Debug, Serialize)]
-pub struct SseCitationEvent {
-    pub reports: Vec<VerificationReport>,
+pub struct SseCitationEvent<'a> {
+    pub reports: &'a [VerificationReport],
     pub is_fully_grounded: bool,
 }
 
@@ -184,4 +184,71 @@ pub struct HealthResponse {
 pub struct StatsResponse {
     pub stats: VectorStoreStats,
     pub tantivy_loaded: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::VerificationReport;
+    use crate::corpus::Domain;
+    use crate::model::{DocumentChunk, HistoricalPeriod};
+
+    fn sample_chunk() -> DocumentChunk {
+        DocumentChunk {
+            chunk_id: "c1".to_string(),
+            doc_id: "doc_1".to_string(),
+            doc_title: "论持久战".to_string(),
+            author: "毛泽东".to_string(),
+            period: HistoricalPeriod::WarOfResistance,
+            date: "1938-05-26".to_string(),
+            volume: "第二卷".to_string(),
+            category: "军事".to_string(),
+            domain: Domain::Any,
+            tags: vec![],
+            chunk_index: 0,
+            total_chunks: 1,
+            char_count: 20,
+            raw_text: "兵民是胜利之本".to_string(),
+            contextualized_text: "兵民是胜利之本".to_string(),
+            section_path: vec![],
+        }
+    }
+
+    fn sample_report() -> VerificationReport {
+        VerificationReport {
+            quote: "兵民是胜利之本".to_string(),
+            claimed_doc_title: "论持久战".to_string(),
+            is_verified: true,
+            match_confidence: 1.0,
+            matched_chunk_id: Some("c1".to_string()),
+            matched_snippet: Some("兵民是胜利之本".to_string()),
+            warning: None,
+        }
+    }
+
+    #[test]
+    fn test_sse_retrieved_borrowed_serializes_same_as_vec() {
+        let chunks = vec![sample_chunk()];
+        let borrowed = SseRetrievedEvent { chunks: &chunks };
+        let json_borrowed = serde_json::to_string(&borrowed).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json_borrowed).unwrap();
+        let expected = serde_json::json!({ "chunks": &chunks });
+        assert_eq!(v, expected);
+    }
+
+    #[test]
+    fn test_sse_citation_borrowed_serializes_same_as_vec() {
+        let reports = vec![sample_report()];
+        let borrowed = SseCitationEvent {
+            reports: &reports,
+            is_fully_grounded: true,
+        };
+        let json_borrowed = serde_json::to_string(&borrowed).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&json_borrowed).unwrap();
+        let expected = serde_json::json!({
+            "reports": &reports,
+            "is_fully_grounded": true,
+        });
+        assert_eq!(v, expected);
+    }
 }
