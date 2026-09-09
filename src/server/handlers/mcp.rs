@@ -174,7 +174,7 @@ mod tests {
             params: Some(json!({
                 "name": "query_dialectical_principles",
                 "arguments": {
-                    "topic": "实践是检验真理的唯一标准",
+                    "query": "实践是检验真理的唯一标准",
                     "synthesize": true
                 }
             })),

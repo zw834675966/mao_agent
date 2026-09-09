@@ -193,7 +193,11 @@ pub struct OfflineLlmClient;
 impl OfflineLlmClient {
     /// Build the four-stage dialectical answer from retrieved chunks.
     pub fn generate(question: &str, chunks: &[DocumentChunk]) -> String {
-        let first_chunk = &chunks[0];
+        let Some(first_chunk) = chunks.first() else {
+            return format!(
+                "### 一、 调查研究 (Fact-Finding & Evidence)\n暂无可用文献证据支撑对【{question}】的研判。\n\n### 二、 主要矛盾分析 (Principal Contradiction)\n证据不足，暂无法判定主要矛盾。\n\n### 三、 理论综合 (Dialectical Synthesis)\n请补充检索或扩大语料后再试。\n\n### 四、 指导实践与方针策略 (Action Policy & Conclusions)\n1. 先完成调查研究，再下判断。"
+            );
+        };
         let title = &first_chunk.doc_title;
         let date = &first_chunk.date;
         let period = first_chunk.period.as_str();

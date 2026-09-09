@@ -5,7 +5,7 @@ fn default_weight() -> f32 {
 }
 
 /// Stable join from a graph node/edge to corpus chunks (titles survive re-ingest; hash chunk_ids do not).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SourceRef {
     #[serde(default)]
     pub doc_id: Option<String>,
