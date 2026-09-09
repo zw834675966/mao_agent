@@ -856,6 +856,12 @@ mod tests {
     use super::*;
     use crate::corpus::Domain;
     use crate::model::DocumentChunk;
+    use std::sync::Mutex;
+
+    /// Serializes tests that mutate the process-global HNSW threshold
+    /// override; without this, parallel test threads race on the atomic
+    /// and `test_hnsw_activates_at_threshold` fails intermittently.
+    static HNSW_THRESHOLD_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     fn create_dummy_chunk(
         id: &str,
@@ -933,6 +939,9 @@ mod tests {
 
     #[test]
     fn test_hnsw_activates_at_threshold() {
+        let _guard = HNSW_THRESHOLD_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         reset_hnsw_threshold_for_test();
         set_hnsw_threshold_for_test(50);
         let mut index = VectorIndex::new(8);
@@ -982,10 +991,14 @@ mod tests {
         assert_eq!(ann[0].chunk_id, brute[0].chunk_id);
 
         reset_hnsw_threshold_for_test();
+        drop(_guard);
     }
 
     #[test]
     fn snapshot_clone_does_not_rebuild_hnsw() {
+        let _guard = HNSW_THRESHOLD_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         set_hnsw_threshold_for_test(2);
         let mut index = VectorIndex::new(2);
         let entries = vec![
@@ -1017,5 +1030,6 @@ mod tests {
         assert_eq!(snap.len(), index.len());
         assert!(index.has_hnsw());
         reset_hnsw_threshold_for_test();
+        drop(_guard);
     }
 }
