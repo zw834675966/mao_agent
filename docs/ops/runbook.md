@@ -96,3 +96,32 @@ cargo run --no-default-features -- mcp --offline --index-file data/vector_store.
 - MCP `verify_historical_citation` auto-retrieves corpus text by `claimed_title` when `context_chunks` are omitted.
 - HTTP `POST /api/v1/verify` still requires caller-supplied `context_chunks` (explicit grounding). See `docs/ops/mcp_sre_guide.md`.
 
+## 7. Loop Engineering & automated maintenance
+
+L1 is **report-only**. It must not patch Rust/Python application source. The only loop write is an atomic replace of root `STATE.md`.
+
+### Gate checker
+
+```bash
+python scripts/gate_check.py check --action tool --paths "src/lib.rs"          # expect 0
+python scripts/gate_check.py check --action tool --paths "config.toml"         # expect 2
+python scripts/gate_check.py --self-test
+python scripts/hook_guard.py   # PreToolUse self-check (same gate.yaml)
+```
+
+Policy: root `gate.yaml` (denylist includes `config.toml`, `.env*`, `data/*.bin`, `data/tantivy_index/**`, `corpus/**/raw/**`, `*.embedcache`). Bindings: `loop-constraints.md`.
+
+### State spine and budget
+
+- Read `STATE.md` before a loop; after `--full`, confirm Snapshot / Retrieval Gate / High Priority were rewritten (not truncated).
+- Remote spend: `loop-budget.md`. At ≥80% of a provider cap, use `--offline --no-rerank`. Kill switch: `MAO_LOOP_PAUSE=1` (L1 exits 2).
+
+### L1 inspect
+
+```bash
+python scripts/loop_l1_inspect.py --check-integrity   # cargo check + corpus frontmatter + raw isolation + index existence
+python scripts/loop_l1_inspect.py --full              # plus eval-retrieval hybrid offline Recall@5 ≥ 0.99, hard-negative test, atomic STATE.md
+```
+
+`--full` drives `cargo run --no-default-features -- eval-retrieval --k 5 --mode hybrid --no-rerank --offline --json`. If `data/vector_store.bin` is not 512-dim, the script retries `data/offline_run2/`. Missing indexes fail closed (non-zero) and do not mutate source.
+

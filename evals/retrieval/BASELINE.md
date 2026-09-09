@@ -1,5 +1,11 @@
 # Retrieval Baseline (Cycle 2 / P1)
 
+> **Stale index size.** The table below is a Cycle 2 snapshot: 59 chunks / 15 docs.
+> Full-corpus ingest is larger (442 docs / 4811 chunks at the 2026-09-09
+> acceptance rerun). Do not treat 59/15 as current inventory. Refresh is
+> scheduled with `tasks/acceptance-followup-bm25-dedup.md` (F1/F2). Until that
+> fix, quote **hybrid/vector only**; do not cite pure-BM25 overflow as quality.
+
 Offline deterministic metrics on the sample corpus index. **No live Cohere / no rerank.**
 
 ## Environment

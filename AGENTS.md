@@ -6,7 +6,7 @@ Single-crate Rust project (bin + lib, no workspace): vector database + retrieval
 
 - Entry: `src/main.rs` (CLI), `src/lib.rs` (public API)
 - Modules: `corpus` (markdown parse / CJK clean / semantic chunk), `vector` (embedders, store, HNSW ANN index), `index` (Tantivy BM25 + hybrid RRF fusion), `graph` (DiGraph knowledge graph + query expansion), `rerank` (Cohere Reranker + fallback), `retry` (bounded exponential backoff), `eval` (Recall/MRR/NDCG@k), `agent` (LLM dialectical reasoning + LlmClient fallback + citation verifier), `mcp` (JSON-RPC 2.0 dialectical MCP tools over stdio/HTTP), `server` (Axum REST + SSE + MCP HTTP + request-id/metrics/CORS), `cli` (clap definitions), `model` (shared types)
-- Docs & CI: `README.md`, CI workflow in `.github/workflows/ci.yml`; 209 tests under `--no-default-features`
+- Docs & CI: `README.md`, CI workflow in `.github/workflows/ci.yml`; 212 tests under `--no-default-features` (verified 2026-09-09)
 - Customizations: Project-specific Antigravity customizations (Skills, Rules, Hooks) reside in `.agents/`
 
 ## Commands
@@ -60,6 +60,19 @@ Use `--no-default-features` for routine test runs. Tests use `DeterministicEmbed
 
 ## Testing notes
 
-- Integration tests in `tests/` (11 files: api, chunker, config, e2e_ingest, graph_expand, graph_store, hnsw_regression, hybrid_and_agent, mcp, retrieval_hard_eval, vector_store) use `tempfile::tempdir()`; no fixtures, no external services, no network. Full suite **209 tests** with `--no-default-features`.
+- Integration tests in `tests/` (15 files: api, chunker, config, corpus_parser_default_author, corpus_scanner, domain_filter, domain, e2e_ingest, graph_expand, graph_store, hnsw_regression, hybrid_and_agent, mcp, retrieval_hard_eval, vector_store) use `tempfile::tempdir()`; no fixtures, no external services, no network. Full suite **212 tests** with `--no-default-features` (verified 2026-09-09).
 - Vector dim in tests varies (64/128/256) — construct stores via `VectorStore::new_deterministic(dim)` rather than copying CLI's 512 constant.
 - Rerank unit tests use mocks only (no Cohere network). Citation adversarial suite expects 100% reject on synonym/reorder/fabricated/cross-doc/noise.
+
+## Loop Engineering (L1)
+
+Machine gates for agent loops. Policy files live at repo root; checkers are Python 3 stdlib.
+
+- `gate.yaml` — path denylist (`config.toml`, `.env*`, `data/*.bin`, Tantivy dir, `corpus/**/raw/**`, embed caches), `maxFiles: 8`, auto-merge allowlist. Checker: `python scripts/gate_check.py check --action <commit|tool|auto-merge> --paths p1,p2`. Exit **0 allow / 2 escalate / 1 error**. Self-test: `python scripts/gate_check.py --self-test`.
+- PreToolUse (`scripts/hook_guard.py`) consults the same policy for write tools. Self-check: `python scripts/hook_guard.py`.
+- `STATE.md` — operational spine (Snapshot, Retrieval Gate, High Priority, Watch List, Recent Noise). L1 may atomically replace this file only.
+- `loop-budget.md` — SiliconFlow / Cohere / Gemini daily caps; at ≥80% degrade to `--offline --no-rerank`. Kill switch: `MAO_LOOP_PAUSE=1`.
+- `loop-constraints.md` — do not delete tests, do not hand-edit indexes, max 3 fix attempts.
+- L1 inspect (report-only): `python scripts/loop_l1_inspect.py --check-integrity` (compile + corpus/raw + indexes) or `--full` (also offline hybrid Recall@5 ≥ 0.99, hard-negative test, atomic `STATE.md` write). Never rewrite application source from L1.
+
+See `docs/ops/runbook.md` §7.
