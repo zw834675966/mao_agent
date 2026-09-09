@@ -204,6 +204,110 @@ async fn test_mcp_handshake_and_capabilities() {
     }
 }
 
+async fn pi_initialize_and_initialized(dispatcher: &McpDispatcher) {
+    let init_req = JsonRpcRequest {
+        jsonrpc: "2.0".to_string(),
+        id: Some(json!(1)),
+        method: "initialize".to_string(),
+        params: Some(json!({
+            "protocolVersion": "2024-11-05",
+            "capabilities": {},
+            "clientInfo": {
+                "name": "pi-coding-agent",
+                "version": "0.1.0"
+            }
+        })),
+    };
+    let resp = dispatcher
+        .handle_request(init_req)
+        .await
+        .expect("pi initialize response");
+    assert!(resp.error.is_none());
+    let result = resp.result.expect("pi initialize result");
+    assert_eq!(result["protocolVersion"], MCP_PROTOCOL_VERSION);
+    assert_eq!(result["serverInfo"]["name"], "mao_agent");
+
+    let initialized = JsonRpcRequest {
+        jsonrpc: "2.0".to_string(),
+        id: None,
+        method: "notifications/initialized".to_string(),
+        params: None,
+    };
+    assert!(
+        dispatcher.handle_request(initialized).await.is_none(),
+        "notifications/initialized must produce no JSON-RPC response"
+    );
+}
+
+#[tokio::test]
+async fn test_mcp_pi_agent_handshake() {
+    let (store, ft, graph, _) = setup_test_context().await;
+    let dispatcher = McpDispatcher::new(store, ft, graph, None);
+    pi_initialize_and_initialized(&dispatcher).await;
+}
+
+#[tokio::test]
+async fn test_mcp_pi_agent_query_dialectical_principles() {
+    let (store, ft, graph, _) = setup_test_context().await;
+    let dispatcher = McpDispatcher::new(store, ft, graph, None);
+    pi_initialize_and_initialized(&dispatcher).await;
+
+    let call_req = JsonRpcRequest {
+        jsonrpc: "2.0".to_string(),
+        id: Some(json!(10)),
+        method: "tools/call".to_string(),
+        params: Some(json!({
+            "name": "query_dialectical_principles",
+            "arguments": {
+                "query": "矛盾的法则与转化",
+                "top_k": 3,
+                "synthesize": false
+            }
+        })),
+    };
+    let resp = dispatcher
+        .handle_request(call_req)
+        .await
+        .expect("principles response");
+    assert!(resp.error.is_none());
+    let result = resp.result.expect("principles result");
+    let text = result["content"][0]["text"].as_str().expect("text");
+    let parsed: Value = serde_json::from_str(text).expect("principles json");
+    let principles = parsed["principles"].as_array().expect("principles array");
+    assert!(!principles.is_empty());
+    assert_eq!(principles[0]["doc_title"], "矛盾论");
+}
+
+#[tokio::test]
+async fn test_mcp_pi_agent_verify_citation() {
+    let (store, ft, graph, _) = setup_test_context().await;
+    let dispatcher = McpDispatcher::new(store, ft, graph, None);
+    pi_initialize_and_initialized(&dispatcher).await;
+
+    let call_req = JsonRpcRequest {
+        jsonrpc: "2.0".to_string(),
+        id: Some(json!(20)),
+        method: "tools/call".to_string(),
+        params: Some(json!({
+            "name": "verify_historical_citation",
+            "arguments": {
+                "quote": "对立统一的法则，是唯物辩证法的最根本的法则。",
+                "claimed_title": "矛盾论"
+            }
+        })),
+    };
+    let resp = dispatcher
+        .handle_request(call_req)
+        .await
+        .expect("citation response");
+    assert!(resp.error.is_none());
+    let result = resp.result.expect("citation result");
+    let text = result["content"][0]["text"].as_str().expect("text");
+    let parsed: Value = serde_json::from_str(text).expect("citation json");
+    assert!(parsed["confidence"].as_f64().is_some());
+    assert_eq!(parsed["verdict"], "ExactMatch");
+}
+
 #[tokio::test]
 async fn test_mcp_query_dialectical_principles() {
     let (store, ft, graph, _) = setup_test_context().await;

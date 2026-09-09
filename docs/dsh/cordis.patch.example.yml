@@ -1,4 +1,11 @@
 # ==============================================================================
+# [DEPRECATED] DeepSeek Harness (DSH) MCP plugin patch for mao_agent
+#
+# Archived. Do not use this as the primary client mount.
+# Replacement: docs/pi/mcp.json  (Pi Coding Agent + pi-mcp-adapter)
+# Guide:       docs/pi/README.md
+# This file is kept so existing DSH profiles can still copy-paste.
+# ==============================================================================
 # DeepSeek Harness (DSH) MCP plugin patch for mao_agent
 # ==============================================================================
 #

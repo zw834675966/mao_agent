@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "mao": {
+      "command": "cargo",
+      "args": ["run", "--release", "--", "mcp", "--offline"],
+      "cwd": "D:\\rust\\mao_agent",
+      "env": {
+        "RUST_LOG": "warn"
+      }
+    }
+  }
+}

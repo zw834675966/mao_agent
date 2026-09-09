@@ -2,7 +2,7 @@
 //!
 //! Compliant with:
 //! - Model Context Protocol 2024-11-05 stdio specification
-//! - DeepSeek Harness `@deepseek-ai/dsh-mcp-client` stdio child process protocol
+//! - Pi Coding Agent `@earendil-works/pi-coding-agent` via `pi-mcp-adapter` (line-delimited JSON-RPC stdio)
 //! - Google SRE Failure Domain Isolation (graceful EOF exit, zero panic, stderr logging isolation)
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};

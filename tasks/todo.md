@@ -1,228 +1,230 @@
-# Tasks: Cycle 13 — Dialectical MCP Engine & DSH Integration (Google SRE & Eng Practices Aligned)
+# Tasks: Cycle 14 — Pi Agent Contract Tests & DSH Advisory Decoupling
 
-Plan document: `tasks/plan.md`.
-Corpus & Architecture context: `README.md`, `AGENTS.md`.
+Plan document: `tasks/plan.md`.  
+Human approved; Cycle 14 implemented.
 
 ---
 
-## Task 13-1: Define MCP JSON-RPC 2.0 Protocol Types and Strict Schema
+## Phase 1: Hermetic Pi contract tests
 
-**Description:** Define standard Model Context Protocol (MCP 2024-11-05) data structures and Google API-aligned error models in `src/mcp/types.rs`. Implement standard JSON-RPC 2.0 requests, responses, notifications, `initialize`, `tools/list`, and `tools/call`. Tool schemas must strictly conform to OpenCode Go / Draft 7 specifications: root `"type": "object"`, explicit `properties`, and root-level `required: [...]` string arrays (never property-level `required: true`).
+### Task 14-1: Add Pi Agent handshake contract test
+
+**Description:** Add `test_mcp_pi_agent_handshake` in `tests/mcp_test.rs`. Verify MCP `initialize` with Pi `clientInfo` (`name: "pi-coding-agent"`, `version: "0.1.0"`) and that `notifications/initialized` returns no response. Do not call tools. Do not rename existing `dsh-agent` fixtures. Server remains client-agnostic.
 
 **Acceptance criteria:**
-- [x] `src/mcp/mod.rs` and `src/mcp/types.rs` created and registered in `src/lib.rs`.
-- [x] Structures defined with serde derives: `JsonRpcRequest`, `JsonRpcResponse`, `JsonRpcError`, `McpInitializeResult`, `McpToolDefinition`, `McpCallToolResult`, `McpTextContent`.
-- [x] Standard JSON-RPC / Google API error codes defined: `INVALID_PARAMS` (-32602), `METHOD_NOT_FOUND` (-32601), `RESOURCE_EXHAUSTED` (-32053), `INTERNAL_ERROR` (-32603).
-- [x] Tool definitions for `query_dialectical_principles` and `verify_historical_citation` produce valid JSON Schema with root `required` array and zero property-level `required: true`.
+- [x] `tests/mcp_test.rs` contains `test_mcp_pi_agent_handshake`.
+- [x] Initialize with Pi `clientInfo` asserts `protocolVersion` `2024-11-05` and `serverInfo.name` `mao_agent`.
+- [x] `notifications/initialized` produces no JSON-RPC response.
 
 **Verification:**
-- [x] Tests pass: `cargo test --no-default-features --lib mcp::types`
-- [x] Build succeeds: `cargo check --no-default-features`
+- [x] `cargo test --no-default-features --test mcp_test test_mcp_pi_agent_handshake`
 
 **Dependencies:** None
 
 **Files likely touched:**
-- `src/lib.rs`
-- `src/mcp/mod.rs`
-- `src/mcp/types.rs`
+- `tests/mcp_test.rs`
 
-**Estimated scope:** Small (3 files)
+**Estimated scope:** XS (1 file)
 
 ---
 
-## Task 13-2: Implement McpDispatcher Core & query_dialectical_principles
+### Task 14-2: Add Pi Agent query_dialectical_principles session test
 
-**Description:** Implement `McpDispatcher` in `src/mcp/dispatcher.rs` handling `initialize`, `notifications/initialized`, `ping`, `tools/list`, and `query_dialectical_principles`. Implements hybrid search + graph triad expansion and optional `synthesize: bool` execution with input validation (clamped `top_k: 1..=20`, non-empty query check).
+**Description:** Add `test_mcp_pi_agent_query_dialectical_principles`. After Pi initialize + initialized, `tools/call` `query_dialectical_principles` with `synthesize: false`. Assert JSON key `principles` (array) and `doc_title`. Do not assert `triads`.
 
 **Acceptance criteria:**
-- [x] `McpDispatcher::new(...)` constructed with `Arc<VectorStore>`, `Option<TantivyIndex>`, `Option<Arc<GraphStore>>`, and `Option<Arc<dyn Reranker>>`.
-- [x] `query_dialectical_principles` executes hybrid RRF retrieval, expands graph contradiction triads, and formats output as structured JSON.
-- [x] When `synthesize: true` is requested, invokes `DialecticalAgent` to append structured philosophical analysis report.
-- [x] Unknown method returns standard -32601 `MethodNotFound` error; empty query returns -32602 `InvalidParams`.
+- [x] `tests/mcp_test.rs` contains `test_mcp_pi_agent_query_dialectical_principles`.
+- [x] Call uses `synthesize: false` (or omitted) and stays offline.
+- [x] Parsed text JSON has non-empty `principles`; no `triads` requirement.
 
 **Verification:**
-- [x] Tests pass: `cargo test --no-default-features --lib mcp::dispatcher`
-- [x] Clippy clean: `cargo clippy --no-default-features --lib -- -D warnings`
+- [x] `cargo test --no-default-features --test mcp_test test_mcp_pi_agent_query_dialectical_principles`
 
-**Dependencies:** Task 13-1
-
-**Files likely touched:**
-- `src/mcp/mod.rs`
-- `src/mcp/dispatcher.rs`
-
-**Estimated scope:** Medium (2 files)
-
----
-
-## Task 13-3: Implement verify_historical_citation with Self-Grounding Auto-Retrieval
-
-**Description:** Implement the `verify_historical_citation` tool inside `McpDispatcher` in `src/mcp/dispatcher.rs`. When `context_chunks` is missing or empty, automatically looks up the authentic document chunks from the local corpus using `claimed_title` and `quote`, feeding them into `CitationVerifier`.
-
-**Acceptance criteria:**
-- [x] Input validation: `quote` and `claimed_title` must not be empty; `min_confidence` clamped to `0.0..=1.0` (default 0.85).
-- [x] If `context_chunks` is omitted, auto-retrieves matching document chunks by title from `VectorStore` / `TantivyIndex`.
-- [x] If claimed document title does not exist in local corpus, returns structured verdict `DocNotFound` with `confidence: 0.0` and `is_valid: false`.
-- [x] Authentic quotes against real corpus titles yield `ExactMatch` or `FuzzyMatch` with `is_valid: true`.
-
-**Verification:**
-- [x] Tests pass: `cargo test --no-default-features --lib mcp::dispatcher::tests`
-- [x] Clippy clean: `cargo clippy --no-default-features --lib -- -D warnings`
-
-**Dependencies:** Task 13-2
-
-**Files likely touched:**
-- `src/mcp/dispatcher.rs`
-- `src/vector/index.rs`
-- `src/vector/store.rs`
-
-**Estimated scope:** Small-Medium (2 files)
-
----
-
-## Checkpoint 13-1: Foundation & Tool Logic
-- [x] `cargo test --no-default-features --lib mcp` all green (9/9 passed)
-- [x] Tool inputSchema assertion passes: root `required: [...]` only, valid Draft 7 JSON Schema
-- [x] Auto-retrieval verification passes for authentic and fabricated quotes
-- [x] Clippy `-D warnings` clean
-
----
-
-## Task 13-4: Implement Stdio Transport & CLI Subcommand (SRE Graceful EOF)
-
-**Description:** Implement `src/mcp/stdio.rs` for newline-delimited JSON-RPC 2.0 streaming over `stdin`/`stdout`. Add `Commands::Mcp(McpArgs)` in `src/cli/mod.rs` and handle it in `src/main.rs`. Ensure all logging (`tracing`) is physically redirected to `stderr` to prevent JSON-RPC stdout pollution, and stdin EOF triggers clean shutdown without leaks.
-
-**Acceptance criteria:**
-- [x] `src/cli/mod.rs` has `Commands::Mcp(McpArgs)` with paths to index, tantivy, and graph files.
-- [x] Running `mao_agent mcp` reads stdin line by line and outputs JSON-RPC lines to stdout.
-- [x] Tracing logs in `main.rs` are directed to `std::io::stderr` during stdio MCP execution.
-- [x] Reaching EOF on stdin cleanly exits the loop and process with code 0 (no hang, no panic).
-
-**Verification:**
-- [x] Tests pass: `cargo test --no-default-features --lib mcp::stdio`
-- [x] Build succeeds: `cargo check --no-default-features`
-
-**Dependencies:** Task 13-3
-
-**Files likely touched:**
-- `src/mcp/stdio.rs`
-- `src/cli/mod.rs`
-- `src/main.rs`
-
-**Estimated scope:** Medium (3 files)
-
----
-
-## Task 13-5: Mount Streamable HTTP MCP Route with Overload Protection & Metrics
-
-**Description:** Expose Streamable HTTP MCP endpoint (`POST /api/v1/mcp`) in `src/server/handlers/mcp.rs` and register it in `src/server/mod.rs`. Protect heavy `synthesize: true` calls with `AppState.ask_semaphore` concurrency control, and record MCP request metrics in `src/server/metrics.rs`.
-
-**Acceptance criteria:**
-- [x] `POST /api/v1/mcp` accepts JSON-RPC request and returns JSON-RPC response with `content-type: application/json`.
-- [x] Calls requesting `synthesize: true` acquire permit from `state.ask_semaphore`; if capacity exhausted, returns standard -32053 `RESOURCE_EXHAUSTED` error.
-- [x] Metrics updated: `record_mcp_request(tool, duration, is_err)`.
-- [x] Route protected by existing bearer token middleware if configured, or open if loopback without token.
-
-**Verification:**
-- [x] Tests pass: `cargo test --no-default-features --lib server::handlers::mcp`
-- [x] Build succeeds: `cargo check --no-default-features`
-
-**Dependencies:** Task 13-3
-
-**Files likely touched:**
-- `src/server/handlers/mod.rs`
-- `src/server/handlers/mcp.rs`
-- `src/server/metrics.rs`
-- `src/server/mod.rs`
-
-**Estimated scope:** Medium (4 files)
-
----
-
-## Task 13-6: Hermetic End-to-End Integration Test Suite
-
-**Description:** Create `tests/mcp_test.rs` with hermetic test fixtures. Validates end-to-end MCP lifecycle: `initialize` handshake, `tools/list` schema validation, `query_dialectical_principles` execution, auto-retrieval `verify_historical_citation`, and error handling for malformed JSON and unknown methods.
-
-**Acceptance criteria:**
-- [x] Test `test_mcp_initialize_and_tools_list_schema` confirms protocol version and valid OpenAPI schema.
-- [x] Test `test_mcp_query_principles_returns_triads` validates retrieval + graph relationships.
-- [x] Test `test_mcp_citation_verification_auto_lookup` verifies real title match vs fabricated title rejection.
-- [x] Test `test_mcp_stdio_roundtrip` simulates stdin/stdout pipeline without network dependencies.
-
-**Verification:**
-- [x] Tests pass: `cargo test --no-default-features --test mcp_test`
-- [x] Full suite green: `cargo test --no-default-features` (160 tests passing)
-
-**Dependencies:** Task 13-4, Task 13-5
+**Dependencies:** Task 14-1 (same file)
 
 **Files likely touched:**
 - `tests/mcp_test.rs`
 
-**Estimated scope:** Medium (1 test file)
+**Estimated scope:** XS (1 file)
 
 ---
 
-## Checkpoint 13-2: Dual Transport & SRE Verification
-- [x] Full test suite passes: `cargo test --no-default-features` (all 160 unit & integration tests green)
-- [x] Stdio and Streamable HTTP endpoints both verified
-- [x] Concurrency limit and error code mappings verified
+### Task 14-3: Add Pi Agent verify_historical_citation session test
 
----
-
-## Task 13-7: DSH cordis.patch.yml Configuration & Operational Runbook
-
-**Description:** Create ready-to-use DSH mounting configuration artifacts in `docs/dsh/` including both `stdio` and `streamable-http` configurations for `cordis.patch.yml`, with exact syntax verified against DSH `@deepseek-ai/dsh-mcp-client`. Add SRE operational guide in `docs/ops/mcp_sre_guide.md`.
+**Description:** Add `test_mcp_pi_agent_verify_citation`. After Pi initialize, call `verify_historical_citation` with `quote` + `claimed_title`, omit `context_chunks`. Assert `confidence` and `verdict`. Title lookup only; caller chunks are not grounding.
 
 **Acceptance criteria:**
-- [x] `docs/dsh/cordis.patch.example.yml` created with valid `- insert:` syntax for `mcp-mao`.
-- [x] `docs/ops/mcp_sre_guide.md` created covering monitoring metrics, error codes, and troubleshooting runbooks.
+- [x] `tests/mcp_test.rs` contains `test_mcp_pi_agent_verify_citation`.
+- [x] `context_chunks` omitted; `claimed_title` present.
+- [x] Response JSON includes `confidence` and `verdict`.
 
 **Verification:**
-- [x] Manual check: syntax passes YAML lint and matches local DSH profile structure.
+- [x] `cargo test --no-default-features --test mcp_test test_mcp_pi_agent_verify_citation`
 
-**Dependencies:** Task 13-6
+**Dependencies:** Task 14-2 (same file)
+
+**Files likely touched:**
+- `tests/mcp_test.rs`
+
+**Estimated scope:** XS (1 file)
+
+---
+
+## Checkpoint 14-1: Protocol tests green
+- [x] `cargo test --no-default-features --test mcp_test`
+- [x] No runtime edits in `src/mcp/dispatcher.rs` or `src/mcp/stdio.rs` from Phase 1
+
+---
+
+## Phase 2: Transport docs and ops probes
+
+### Task 14-4: Align stdio module docs with Pi Agent
+
+**Description:** Update `src/mcp/stdio.rs` module docstring: primary documented client is `@earendil-works/pi-coding-agent` via `pi-mcp-adapter`. Do not change runtime. Do not edit `dispatcher.rs` (no DSH string there).
+
+**Acceptance criteria:**
+- [x] Header no longer presents `@deepseek-ai/dsh-mcp-client` as the primary client.
+- [x] Header names Pi / `pi-mcp-adapter`.
+- [x] No runtime or unit-test logic changes in this task.
+
+**Verification:**
+- [x] `cargo clippy --no-default-features --lib -- -D warnings`
+
+**Dependencies:** None (parallel with Phase 1)
+
+**Files likely touched:**
+- `src/mcp/stdio.rs`
+
+**Estimated scope:** XS (1 file)
+
+---
+
+### Task 14-5: Implement Pi stdio probe script
+
+**Description:** Create `scripts/verify_pi_stdio.py` (Python 3 stdlib). Spawn `cargo run --no-default-features -- mcp --offline` (debug, not `--release`). Drive initialize (Pi clientInfo) → initialized → tools/list → query_dialectical_principles (`synthesize: false`). Child traces on stderr. Exit 0 on valid frames. Optional `--bin`. Not a CI job.
+
+**Acceptance criteria:**
+- [x] Script exists; stdlib only.
+- [x] Default spawn is not `--release`.
+- [x] Exit 0 on valid initialize + tools/list frames.
+- [x] Not added to `.github/workflows/ci.yml`.
+
+**Verification:**
+- [x] `python scripts/verify_pi_stdio.py` (ops probe; first run may compile)
+
+**Dependencies:** None
+
+**Files likely touched:**
+- `scripts/verify_pi_stdio.py`
+
+**Estimated scope:** XS (1 file)
+
+---
+
+### Task 14-6: Implement Pi HTTP probe script
+
+**Description:** Create `scripts/verify_pi_http.py` (Python 3 stdlib) with `--mock` and `--url`. `--mock` validates Pi-shaped JSON-RPC POST bodies for `/api/v1/mcp` with no network.
+
+**Acceptance criteria:**
+- [x] Supports `--mock` and `--url`.
+- [x] `--mock` exits 0 with no network.
+- [x] Documents `POST /api/v1/mcp`.
+
+**Verification:**
+- [x] `python scripts/verify_pi_http.py --mock`
+
+**Dependencies:** None
+
+**Files likely touched:**
+- `scripts/verify_pi_http.py`
+
+**Estimated scope:** XS (1 file)
+
+---
+
+## Checkpoint 14-2: Docs + hermetic HTTP probe
+- [x] `python scripts/verify_pi_http.py --mock`
+- [x] `cargo clippy --no-default-features --all-targets -- -D warnings`
+- [x] Stdio probe run when a debug binary can be spawned (not a CI blocker)
+
+---
+
+## Phase 3: SRE retarget, DSH advisory deprecation, index sync
+
+### Task 14-7: Retarget MCP SRE guide to Pi Agent
+
+**Description:** Update `docs/ops/mcp_sre_guide.md` primary runtime to Pi Agent + `pi-mcp-adapter`. Keep Draft-7 / metrics sections. Link `docs/pi/README.md` and `docs/pi/mcp.json`. Retarget, do not rewrite.
+
+**Acceptance criteria:**
+- [x] Target-runtime blurb lists Pi first.
+- [x] Troubleshooting covers `pi-mcp-adapter` / stdout vs stderr framing.
+- [x] Links to `docs/pi/` resolve.
+
+**Verification:**
+- [x] Manual markdown link check to `docs/pi/README.md` and `docs/pi/mcp.json`
+
+**Dependencies:** None (complete before 14-9)
+
+**Files likely touched:**
+- `docs/ops/mcp_sre_guide.md`
+
+**Estimated scope:** XS (1 file)
+
+---
+
+### Task 14-8: Add deprecation notices to DSH artifacts
+
+**Description:** Prepend `[DEPRECATED]` banners to the two `docs/dsh/` files; redirect to `docs/pi/`. Do not delete.
+
+**Acceptance criteria:**
+- [x] `docs/dsh/cordis.patch.example.yml` header redirects to `docs/pi/mcp.json`.
+- [x] `docs/dsh/dialectical_counselor_persona.md` header redirects to `docs/pi/dialectical_counselor_persona.md`.
+- [x] Both files still present.
+
+**Verification:**
+- [x] `git diff docs/dsh/cordis.patch.example.yml docs/dsh/dialectical_counselor_persona.md`
+
+**Dependencies:** Task 14-7
 
 **Files likely touched:**
 - `docs/dsh/cordis.patch.example.yml`
-- `docs/ops/mcp_sre_guide.md`
-
-**Estimated scope:** XS (2 doc files)
-
----
-
-## Task 13-8: Dialectical Counselor System Persona Charter
-
-**Description:** Write `docs/dsh/dialectical_counselor_persona.md` documenting the 4-step Dialectical Thinking Chain (实事求是/调查研究 -> 矛盾剖析/问题定性 -> 战略切片/作战计划 -> 实践检验/闭环标准). Establishes operational guidelines for DSH agents to invoke `mcp__mao__*` tools before touching destructive tools.
-
-**Acceptance criteria:**
-- [x] Document contains complete, copy-pasteable system prompt persona for DSH.
-- [x] Seamlessly aligns with DSH's existing `dsh-pai-lite` action gate (`主矛`, `最小切片`, `验收`).
-- [x] Includes clear tool-calling guidelines and examples for when to consult `query_dialectical_principles` and `verify_historical_citation`.
-
-**Verification:**
-- [x] Manual check: comprehensive review against user behavioral guidelines.
-
-**Dependencies:** Task 13-7
-
-**Files likely touched:**
 - `docs/dsh/dialectical_counselor_persona.md`
 
-**Estimated scope:** XS (1 doc file)
+**Estimated scope:** S (2 files)
 
 ---
 
-## Checkpoint 13-3: Full Production Gate & Delivery
+### Task 14-9: Update runbook and AGENTS.md client index
+
+**Description:** Sync `docs/ops/runbook.md` §6 and `AGENTS.md` so Pi (`docs/pi/README.md`) is the primary documented client mount and DSH is archived/advisory. No CLI/runtime change.
+
+**Acceptance criteria:**
+- [x] Runbook MCP section links `docs/pi/README.md`.
+- [x] `AGENTS.md` lists Pi as primary mount; DSH as archived/deprecated path.
+
+**Verification:**
+- [x] `git diff docs/ops/runbook.md AGENTS.md` (not `cargo fmt --check`)
+
+**Dependencies:** Task 14-8
+
+**Files likely touched:**
+- `docs/ops/runbook.md`
+- `AGENTS.md`
+
+**Estimated scope:** S (2 files)
+
+---
+
+## Checkpoint 14-3: Full gate
 - [x] `cargo fmt --check`
 - [x] `cargo clippy --no-default-features --all-targets -- -D warnings`
-- [x] `cargo test --no-default-features` all green (160 tests)
-- [x] Ready for user review and deployment into DSH
+- [x] `cargo test --no-default-features`
+- [x] DSH files remain with banners; Pi docs not recreated
 
 ---
 
-## Cycle 12 closure note (2026-09-06, appended post-rewrite)
+## Constraints (must)
 
-Cycle 12 tasks (Google 3 Nits + ANALYSIS C-1~C-7) completed earlier this session; this file was rewritten for Cycle 13 in a parallel session, so the historical checklist is preserved in git history + ANALYSIS.md. Final unrun gate now executed:
-
-- [x] serve live probe on current default index (port 3210, serve --offline --graph-file data/graph_store.bin): /live **200**, /health **200** (index_loaded/tantivy_loaded true, 59 vectors / 15 docs / 512-dim), /metrics **200**.
-- [x] POST /api/v1/search {"mode":"graph"} → **400** (mode allowlist intact).
-- [x] Hybrid 主要矛盾与阿姆达尔定律 over HTTP: 3 hits, Top1《矛盾论》 graph-annotated (seed ref resolves; empty Amdahl bonus expected on sample index — scope note in vals/retrieval/GRAPH.md).
-- Nit logged during probe: seed-annotated dual hits serialize graph_paths: [] (empty array) instead of absent — cosmetic, defer to a later cycle.
+- [x] C1–C12 in `tasks/plan.md` still hold at Checkpoint 14-3
+- [x] No new MCP tools; no `clientInfo` branch in dispatcher
+- [x] Probe scripts not added to GitHub Actions

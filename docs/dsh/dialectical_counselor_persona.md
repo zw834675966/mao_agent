@@ -1,3 +1,5 @@
+> **[DEPRECATED]** This DSH-oriented persona is archived. Use **`docs/pi/dialectical_counselor_persona.md`** (Pi Coding Agent). This file is kept for existing DSH readers only.
+
 # 辩证参谋行为宪章与工业级提示词工程规范
 # Dialectical Counselor Persona & Agent Prompt Engineering Specification
 

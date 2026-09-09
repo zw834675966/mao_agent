@@ -83,10 +83,14 @@ Ctrl+C / SIGTERM triggers graceful drain (`GracefulShutdown`).
 
 ## 6. MCP (stdio / HTTP)
 
+Primary client mount: **Pi Coding Agent** via `pi-mcp-adapter` — see `docs/pi/README.md` and `docs/pi/mcp.json`. DSH examples under `docs/dsh/` are archived (`[DEPRECATED]` banners). SRE: `docs/ops/mcp_sre_guide.md`.
+
 ```bash
 # After offline ingest:
 cargo run --no-default-features -- mcp --offline --index-file data/vector_store.bin
 # HTTP: POST /mcp and /api/v1/mcp on the serve process (same auth/CORS as other API routes).
+# Hermetic probes (not CI): python scripts/verify_pi_http.py --mock
+#                          python scripts/verify_pi_stdio.py
 ```
 
 - MCP `verify_historical_citation` auto-retrieves corpus text by `claimed_title` when `context_chunks` are omitted.

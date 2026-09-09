@@ -34,7 +34,7 @@
 # 检查编译 (使用轻量 hash 嵌入器，无需下载模型)
 cargo check --no-default-features
 
-# 运行完整测试套件 (209 个单元与集成测试，含 Gemini / API / HNSW / Graph / MCP / citation adversarial)
+# 运行完整测试套件 (212 个单元与集成测试，含 Gemini / API / HNSW / Graph / MCP / citation adversarial)
 cargo test --no-default-features
 
 # 编译发布版本
@@ -83,7 +83,7 @@ SiliconFlow 密钥解析（clap：`--embed-api-key` 绑定 env `EMBED_API_KEY`�
 
 ### MCP 服务器（stdio / HTTP）
 ```bash
-# stdio（DeepSeek Harness / OpenCode MCP 子进程）
+# stdio（Pi Coding Agent，经 pi-mcp-adapter 的 MCP 子进程；挂载配置见 docs/pi/mcp.json）
 cargo run --no-default-features -- mcp --offline
 
 # 或随 HTTP serve 暴露：POST /mcp 与 POST /api/v1/mcp

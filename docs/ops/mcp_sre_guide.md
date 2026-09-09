@@ -1,7 +1,8 @@
 # Mao Agent MCP Server SRE & Operations Guide
 
 > **Protocol Conformance**: Model Context Protocol (MCP) Specification `2024-11-05` / JSON-RPC 2.0  
-> **Target Runtimes**: DeepSeek Harness (DSH), OpenCode, Claude Desktop, Cursor, and custom agent harnesses.  
+> **Target Runtimes**: Pi Coding Agent (`@earendil-works/pi-coding-agent`) via `pi-mcp-adapter` (primary); OpenCode, Claude Desktop, Cursor, and other MCP 2024-11-05 clients. DSH (`docs/dsh/`) is archived — see advisory banners there.  
+> **Mount docs**: `docs/pi/README.md`, `docs/pi/mcp.json`  
 > **Engineering Standard**: Google SRE (Site Reliability Engineering), Failure Domain Isolation, Hermetic Verification.
 
 ---
@@ -12,7 +13,7 @@
 
 ```
                       ┌────────────────────────────────────────┐
-                      │    Agent Harness (DSH / OpenCode)      │
+                      │  Pi Agent + pi-mcp-adapter / OpenCode  │
                       └────┬───────────────────────────────┬───┘
                            │ (Stdio: Line-delimited JSON)   │ (HTTP POST: /api/v1/mcp)
                            ▼                               ▼
@@ -49,7 +50,7 @@
 
 ## 2. Tools & Schema Guarantees
 
-All exposed tools are generated with strict JSON Schema Draft 7 conformance to eliminate DSH / OpenCode Go schema parsing panics:
+All exposed tools are generated with strict JSON Schema Draft 7 conformance to eliminate Pi / OpenCode Go schema parsing panics:
 - Root-level `"type": "object"`
 - Direct property dictionary under `"properties"`
 - Root-level required string array under `"required"` (zero property-level `"required": true`)
@@ -135,13 +136,17 @@ mao_mcp_latency_ms_max 142
 
 ## 5. Troubleshooting Runbook
 
-### Issue 1: DSH / OpenCode UI crashes with 400 on startup
+### Issue 1: Pi Agent / `pi-mcp-adapter` / OpenCode UI crashes with 400 on startup
 - **Cause**: Tool schema contained property-level `required: true` or top-level `type` was missing.
-- **Resolution**: `mao_agent` strictly conforms to JSON Schema Draft 7 with root `required: [...]` array. Ensure client configuration points to `mao_agent` version `≥ 0.1.0`.
+- **Resolution**: `mao_agent` strictly conforms to JSON Schema Draft 7 with root `required: [...]` array. Mount via `docs/pi/mcp.json` (merge into `~/.pi/agent/mcp.json` or `.pi/mcp.json`). Ensure the client points at `mao_agent` version `≥ 0.1.0`.
 
 ### Issue 2: Agent reports "Broken pipe" or Stdio framing corruption
-- **Cause**: Background log messages printed to `stdout` instead of `stderr`.
-- **Resolution**: In `src/main.rs`, verify `tracing_subscriber` is initialized with `.with_writer(std::io::stderr)`.
+- **Cause**: Background log messages printed to `stdout` instead of `stderr`, or `pi-mcp-adapter` mixed diagnostics into the JSON-RPC stdout pipe.
+- **Resolution**: In `src/main.rs`, verify `tracing_subscriber` is initialized with `.with_writer(std::io::stderr)`. Stdout is line-delimited JSON-RPC only. Adapter and `RUST_LOG` must not write to the child's stdout. Ops probe: `python scripts/verify_pi_stdio.py` (debug, not `--release`).
+
+### Issue 2b: `pi-mcp-adapter` lists tools but calls hang
+- **Cause**: HTTP client posted to the wrong path, or stdio child was started with `--release` while a debug `mao_agent.exe` lock is held.
+- **Resolution**: HTTP is `POST /api/v1/mcp` (alias `POST /mcp`). Hermetic body check: `python scripts/verify_pi_http.py --mock`. On Windows `os error 5`, see Issue 4.
 
 ### Issue 3: Verification returns `DocNotFound`
 - **Cause**: The `claimed_title` provided by the model does not match titles in `data/vector_store.bin`.
