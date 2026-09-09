@@ -1,0 +1,23 @@
+# Machine-readable path denylist for mao_agent (loop-gate protocol).
+# Enforced by scripts/gate_check.py and scripts/hook_guard.py.
+# Keep in sync with loop-constraints.md.
+version: 1
+
+denylist:
+  - "config.toml"
+  - ".env*"
+  - "data/*.bin"
+  - "data/tantivy_index/**"
+  - "corpus/**/raw/**"
+  - "raw/**"
+  - "*.embedcache"
+  - ".fastembed_cache/**"
+
+# Escalate when a change touches more than this many files.
+maxFiles: 8
+
+# --action auto-merge only proceeds if every changed path matches one of these.
+autoMergeAllowlist:
+  - "docs/**"
+  - "**/*.md"
+  - "AGENTS.md"
