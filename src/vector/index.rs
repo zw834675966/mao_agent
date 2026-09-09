@@ -894,6 +894,10 @@ mod tests {
 
     #[test]
     fn test_vector_index_crud_and_search() {
+        let _guard = HNSW_THRESHOLD_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        reset_hnsw_threshold_for_test();
         let mut index = VectorIndex::new(3);
 
         let entry1 = VectorEntry {
